@@ -1,3 +1,19 @@
+
+class Utils {
+    constructor(){
+
+    }
+    dotProduct(a,b){
+        return a.x * b.x + a.y * b.y;
+    }
+    getMag(x,y){
+        return Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2));
+    }
+    getMagSq(x1, y1, x2, y2){
+        return Math.pow(x2-x1,2) + Math.pow(y2-y1, 2);
+    }
+
+}
 class Timer{
     constructor(duration,callback,ref){
         this.start = Date.now();

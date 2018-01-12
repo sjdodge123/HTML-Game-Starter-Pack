@@ -1,13 +1,19 @@
 <html>
     <head>
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
         <script src="globals.js"></script>
         <script src="utils.js"></script>
         <script src="game.js"></script>
+        <script src="objects.js"></script>
+        <script src="gameboard.js"></script>
+        <script src="world.js"></script>
     </head>
     <body>
-        <button onclick="startClicked()">Start</button>
+        <button onclick="startClicked()">Start/Resume</button>
         <button onclick="stopClicked()">Stop</button>
-        <canvas id="gameCanvas" height="800" width="600"></canvas>
+        <br>
+        <br>
+        <canvas id="gameCanvas" height="600" width="800" style="border:1px solid #000000;"></canvas>
     </body>
     <footer>
 

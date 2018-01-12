@@ -1,13 +1,21 @@
 class Game{
     constructor(){
+        this.dt = 0;
         this.gameRunning = false;
         this.timers = [];
+        this.gameboard = new Gameboard();
+        //this.world = new World(this.gameboard);
     }
-    update(){
+    update(dt){
+        this.dt = dt;
         for(var i=0;i<this.timers.length;i++){
             this.timers[i].update();
         }
-        console.log("Game updating :" + dt);
+        this.gameboard.update(dt);
+        //console.log("Game updating :" + dt);
+    }
+    resetGame(){
+        this.world.loadMap();
     }
     startGame(){
         this.gameRunning = true;
@@ -31,7 +39,7 @@ function animloop(){
 
 //For now the game loop will simply consist of updating the timers array and logging the dt or DeltaTime
 function gameLoop(dt){
-    globals.myGame.update();
+    globals.myGame.update(dt);
 }
 
 //Function to call when the button on the screen is clicked
