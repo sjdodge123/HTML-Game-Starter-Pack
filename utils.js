@@ -12,6 +12,24 @@ class Utils {
     getMagSq(x1, y1, x2, y2){
         return Math.pow(x2-x1,2) + Math.pow(y2-y1, 2);
     }
+    getRandomInt(min,max){
+        min = Math.ceil(min);
+		max = Math.floor(max);
+		return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    checkDistance(obj1,obj2){
+        var objX1 = obj1.newX || obj1.x;
+    	var objY1 = obj1.newY || obj1.y;
+    	var objX2 = obj2.newX || obj2.x;
+    	var objY2 = obj2.newY || obj2.y;
+    	var distance = this.getMag(objX2 - objX1,objY2 - objY1);
+      	distance -= obj1.radius || obj1.height/2;
+    	distance -= obj2.radius || obj2.height/2;
+    	if(distance <= 0){
+    		return true;
+    	}
+    	return false;
+    }
 
 }
 class Timer{

@@ -1,43 +1,48 @@
-class World {
-    constructor(gameboard){
-        this.gameboard = gameboard;
-        this.worldObjectList = {};
-        this.currentObjectList = {};
-        this.mapIndex = 0;
-        this.worldMaps = 0;
-        this.mapReader = new MapReader();
-        this.loadMap('exampleMap.json');
+class World extends Rect{
+    constructor(offsetX,offsetY){
+        super(0,0,"orange",globals.canvas.height-(offsetY*2),globals.canvas.width-(offsetX*2),0);
+        this.offsetX = offsetX;
+        this.offsetY = offsetY;
     }
-    getCurrentMapIndex(){
-        return this.mapIndex;
+    update(dt){
+        super.update(dt);
     }
-    getPreviousMap(){
-        this.mapIndex--;
-        this.loadMap();
+    draw(){
+        globals.ctx.clearRect(this.offsetX,this.offsetY,this.width,this.length);
+
+        globals.ctx.save();
+        globals.ctx.strokeStyle = this.color;
+        globals.ctx.rect(this.offsetX,this.offsetY,this.width,this.length);
+        globals.ctx.stroke();
+        globals.ctx.restore();
     }
-    getNextMap(){
-        this.mapIndex++;
-        this.loadMap();
-    }
-    loadMap(filepath){
-        this.gameboard.clear();
-        this.mapReader.read(filepath);
-    }
-    buildMap(map){
-        this.mapIndex = map.index;
-        //this.worldObjectList[this.mapIndex] = map.getWorldObjects();
-        //this.currentObjectList = this.worldObjectList[this.mapIndex];
+    testCircle(shape){
+        if(shape.newX - shape.radius < this.x){
+    		shape.newX = shape.x;
+    		shape.velX = -shape.velX;
+    	}
+    	if(shape.newX + shape.radius > this.x + this.width){
+    		shape.newX = shape.x;
+    		shape.velX = -shape.velX;
+    	}
+    	if (shape.newY - shape.radius < this.y){
+    		shape.newY = shape.y;
+    		shape.velY = -shape.velY;
+    	}
+    	if(shape.newY + shape.radius > this.y + this.height){
+    		shape.newY = shape.y;
+    		shape.velY = -shape.velY;;
+    	}
     }
 }
+/*
 class Map {
     constructor(data){
         this.name = data.name;
 
-        /*
         for(var i=0;i<data.worldObjects.length;i++){
             this.worldObjectList.push()
         }
-        */
 
     }
     getWorldObjects(){
@@ -61,3 +66,4 @@ class MapReader {
         });
     }
 }
+*/

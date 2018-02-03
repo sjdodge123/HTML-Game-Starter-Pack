@@ -3,19 +3,17 @@ class Game{
         this.dt = 0;
         this.gameRunning = false;
         this.timers = [];
+        this.world = new World(25,25);
         this.gameboard = new Gameboard();
-        //this.world = new World(this.gameboard);
     }
     update(dt){
         this.dt = dt;
         for(var i=0;i<this.timers.length;i++){
             this.timers[i].update();
         }
+        this.world.update(dt);
         this.gameboard.update(dt);
         //console.log("Game updating :" + dt);
-    }
-    resetGame(){
-        this.world.loadMap();
     }
     startGame(){
         this.gameRunning = true;
@@ -26,6 +24,10 @@ class Game{
         this.gameRunning = false;
     }
 }
+
+
+
+
 //Start main update loop
 function animloop(){
     if(globals.myGame.gameRunning){

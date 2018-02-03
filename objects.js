@@ -7,15 +7,36 @@ class GameObject {
     update(dt){
         this.dt = dt;
     }
+    handleHit(object){
+        console.log(this.type + " hit a " + object.type);
+    }
 }
 class Shape extends GameObject{
     constructor(x,y,color){
+        super();
         this.x = x;
         this.y = y;
+        this.newX = 0;
+        this.newY = 0;
         this.color = color;
+        this.setRandomMovement();
+    }
+    move(x,y){
+        this.newX = x;
+        this.newY = y;
+    }
+    _move(){
+        this.x += this.newX + this.velX;// * this.dt;
+        this.y += this.newY + this.velY; //* this.dt;
+
+    }
+    setRandomMovement(){
+        this.velX = globals.utils.getRandomInt(-1,1);
+        this.velY = globals.utils.getRandomInt(-1,1);
     }
     update(dt){
-        this.super(dt);
+        super.update(dt);
+        this._move();
         this.draw();
     }
     inBounds(shape){
@@ -30,11 +51,13 @@ class Shape extends GameObject{
 }
 class Circle extends Shape{
     constructor(x,y,color,radius){
-        this.super(x,y,color);
+        super(x,y,color);
+        this.type = "Circle";
         this.radius = radius;
     }
     draw(){
         globals.ctx.save();
+        globals.ctx.strokeStyle=this.color;
         globals.ctx.beginPath();
         globals.ctx.arc(this.x,this.y,this.radius,0,2*Math.PI);
         globals.ctx.stroke();
@@ -82,12 +105,12 @@ class Circle extends Shape{
 		return false;
 	}
     lineIntersectCircle(a, b){
-
+        /*
 	    var ap, ab, dirAB, magAB, projMag, perp, perpMag;
 	    ap = {x: this.x - a.x, y: this.y - a.y};
 	    ab = {x: b.x - a.x, y: b.y - a.y};
 	    magAB = Math.sqrt(globals.utils.dotProduct(ab,ab));
-	    dirAB = {x: ab.x/magAB, y: ab.y/magAB};
+	    dirAB = {x: abthis.tes.x/magAB, y: ab.y/magAB};
 
 	    projMag = utils.dotProduct(ap, dirAB);
 
@@ -97,23 +120,28 @@ class Circle extends Shape{
 	        return true;
 	    }
 	    return false;
+        */
 	}
     getRandomCircleLoc(minR,maxR){
+        /*
 		var r = Math.floor(Math.random()*(maxR - minR));
 		var angle = Math.floor(Math.random()*(Math.PI*2 - 0));
-		return {x:r*Math.cos(angle)+this.x,y:r*Math.sin(angle)+this.y};
+        return this.tesn {x:r*Math.cos(angle)+this.x,y:r*Math.sin(angle)+this.y};
+        */
 	}
 }
 class Rect extends Shape{
     constructor(x,y,color,length,width,angle){
-        this.super(x,y,color);
+        super(x,y,color);
         this.length = length;
         this.width = width;
         this.angle = angle;
+        this.type = "Rect";
         this.vertices = this.getVertices();
     }
     draw(){
         globals.ctx.save();
+        globals.ctx.fillStyle = this.color;
         globals.ctx.translate(this.x,this.y);
         globals.ctx.rotate(this.angle);
         globals.ctx.fillRect(0,0,this.length,this.width);
