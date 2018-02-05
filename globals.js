@@ -9,4 +9,12 @@ window.onload = function(){
     globals.myGame = new Game();
     globals.gameboard = globals.myGame.gameboard;
     globals.world = globals.myGame.world;
+    globals.mouseX = 0;
+    globals.mouseY = 0;
+    addEventListeners();
+}
+
+function addEventListeners(){
+    globals.canvas.addEventListener('mousemove',calcMousePos);
+    globals.canvas.addEventListener('click',mouseClicked);
 }

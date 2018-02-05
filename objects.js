@@ -1,5 +1,6 @@
 class GameObject {
     constructor(){
+        this.alive = true;
         this.velX = 0;
         this.velY = 0;
         this.dt = 0;
@@ -19,7 +20,7 @@ class Shape extends GameObject{
         this.newX = 0;
         this.newY = 0;
         this.color = color;
-        this.setRandomMovement();
+        this.originalColor = color;
     }
     move(x,y){
         this.newX = x;
@@ -48,6 +49,12 @@ class Shape extends GameObject{
         }
         return false;
     }
+    select(){
+        this.color = "purple";
+    }
+    unselect(){
+        this.color = this.originalColor;
+    }
 }
 class Circle extends Shape{
     constructor(x,y,color,radius){
@@ -57,10 +64,10 @@ class Circle extends Shape{
     }
     draw(){
         globals.ctx.save();
-        globals.ctx.strokeStyle=this.color;
+        globals.ctx.fillStyle=this.color;
         globals.ctx.beginPath();
         globals.ctx.arc(this.x,this.y,this.radius,0,2*Math.PI);
-        globals.ctx.stroke();
+        globals.ctx.fill();
         globals.ctx.restore();
     }
     getExtents(){
@@ -105,22 +112,20 @@ class Circle extends Shape{
 		return false;
 	}
     lineIntersectCircle(a, b){
-        /*
-	    var ap, ab, dirAB, magAB, projMag, perp, perpMag;
-	    ap = {x: this.x - a.x, y: this.y - a.y};
-	    ab = {x: b.x - a.x, y: b.y - a.y};
-	    magAB = Math.sqrt(globals.utils.dotProduct(ab,ab));
-	    dirAB = {x: abthis.tes.x/magAB, y: ab.y/magAB};
+        var ap, ab, dirAB, magAB, projMag, perp, perpMag;
+        ap = {x: this.x - a.x, y: this.y - a.y};
+        ab = {x: b.x - a.x, y: b.y - a.y};
+        magAB = Math.sqrt(globals.utils.dotProduct(ab,ab));
+        dirAB = {x: ab.x/magAB, y: ab.y/magAB};
 
-	    projMag = utils.dotProduct(ap, dirAB);
+        projMag = globals.utils.dotProduct(ap, dirAB);
 
-	    perp = {x: ap.x - projMag*dirAB.x, y: ap.y - projMag*dirAB.y};
-	    perpMag = Math.sqrt(globals.utils.dotProduct(perp, perp));
-	    if ((0 < perpMag) && (perpMag < this.radius) && (0 <  projMag) && (projMag < magAB)){
-	        return true;
-	    }
-	    return false;
-        */
+        perp = {x: ap.x - projMag*dirAB.x, y: ap.y - projMag*dirAB.y};
+        perpMag = Math.sqrt(globals.utils.dotProduct(perp, perp));
+        if ((0 < perpMag) && (perpMag < this.radius) && (0 <  projMag) && (projMag < magAB)){
+            return true;
+        }
+        return false;
 	}
     getRandomCircleLoc(minR,maxR){
         /*
@@ -138,13 +143,14 @@ class Rect extends Shape{
         this.angle = angle;
         this.type = "Rect";
         this.vertices = this.getVertices();
+        //this.setRandomMovement();
     }
     draw(){
         globals.ctx.save();
         globals.ctx.fillStyle = this.color;
-        globals.ctx.translate(this.x,this.y);
+        globals.ctx.translate(this.x - this.width/2,this.y - this.length/2);
         globals.ctx.rotate(this.angle);
-        globals.ctx.fillRect(0,0,this.length,this.width);
+        globals.ctx.fillRect(0,0,this.width,this.length);
         globals.ctx.restore();
     }
     getVertices(){
@@ -210,4 +216,20 @@ class Rect extends Shape{
     testCircle(circle){
 		return circle.testRect(this);
 	}
+}
+
+class TargetingCircle extends Circle{
+    constructor(x,y,color,radius,duration){
+        super(x,y,color,radius);
+        this.duration = duration;
+        this.spawnDate = Date.now();
+    }
+    update(dt){
+        var elapsedTime = Date.now() - this.spawnDate;
+        if(elapsedTime > this.duration){
+            this.alive = false;
+            return;
+        }
+        super.update(dt);
+    }
 }

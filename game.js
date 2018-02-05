@@ -51,3 +51,32 @@ function stopClicked(){
 function startClicked(){
     globals.myGame.startGame();
 }
+
+function calcMousePos(evt){
+    var mousePos = getMousePos(evt);
+    globals.mouseX = mousePos.x;
+    globals.mouseY = mousePos.y;
+}
+function mouseClicked(evt){
+    switch (event.which) {
+       case 1:
+           globals.gameboard.selectNearestUnit(globals.mouseX,globals.mouseY);
+           break;
+       case 2:
+           console.log('Middle Mouse button pressed.');
+           break;
+       case 3:
+           console.log('Right Mouse button pressed.');
+           break;
+       default:
+           console.log('You have a strange Mouse!');
+   }
+}
+
+function getMousePos(evt) {
+    var rect = globals.canvas.getBoundingClientRect();
+    return {
+      x: evt.clientX - rect.left,
+      y: evt.clientY - rect.top
+    };
+}

@@ -3,9 +3,23 @@ class World extends Rect{
         super(0,0,"orange",globals.canvas.height-(offsetY*2),globals.canvas.width-(offsetX*2),0);
         this.offsetX = offsetX;
         this.offsetY = offsetY;
+        this.pieces = [];
     }
     update(dt){
         super.update(dt);
+        for(var i=0;i<this.pieces.length;i++){
+            if(this.pieces[i].alive == false){
+                this.removePiece(i);
+                continue;
+            }
+            this.pieces[i].update(dt);
+        }
+    }
+    addPiece(object){
+        this.pieces.push(object);
+    }
+    removePiece(index){
+        this.pieces.splice(index,1);
     }
     draw(){
         globals.ctx.clearRect(this.offsetX,this.offsetY,this.width,this.length);

@@ -17,14 +17,28 @@ class Utils {
 		max = Math.floor(max);
 		return Math.floor(Math.random() * (max - min + 1)) + min;
     }
-    checkDistance(obj1,obj2){
+    findDistance(obj1,obj2){
         var objX1 = obj1.newX || obj1.x;
     	var objY1 = obj1.newY || obj1.y;
     	var objX2 = obj2.newX || obj2.x;
     	var objY2 = obj2.newY || obj2.y;
     	var distance = this.getMag(objX2 - objX1,objY2 - objY1);
-      	distance -= obj1.radius || obj1.height/2;
-    	distance -= obj2.radius || obj2.height/2;
+        if(obj1.radius != null){
+            distance -=  obj1.radius;
+        }
+        if(obj1.length != null){
+            distance -= obj1.length/2;
+        }
+        if(obj2.radius != null){
+            distance -= obj2.radius;
+        }
+        if(obj2.length != null){
+            distance -= obj2.length/2;
+        }
+        return distance;
+    }
+    checkDistance(obj1,obj2){
+        var distance = this.findDistance(obj1,obj2);
     	if(distance <= 0){
     		return true;
     	}
