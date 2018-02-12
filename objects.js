@@ -32,8 +32,8 @@ class Shape extends GameObject{
 
     }
     setRandomMovement(){
-        this.velX = globals.utils.getRandomInt(-1,1);
-        this.velY = globals.utils.getRandomInt(-1,1);
+        this.velX = globals.utils.getRandomInt(-2,2);
+        this.velY = globals.utils.getRandomInt(-2,2);
     }
     update(dt){
         super.update(dt);
@@ -134,6 +134,12 @@ class Circle extends Shape{
         return this.tesn {x:r*Math.cos(angle)+this.x,y:r*Math.sin(angle)+this.y};
         */
 	}
+    handleHit(shape){
+        if(shape.type == "Circle"){
+            this.velX = shape.velX - this.velX;
+            this.velY = shape.velY - this.velY;
+        }
+    }
 }
 class Rect extends Shape{
     constructor(x,y,color,length,width,angle){
@@ -143,7 +149,6 @@ class Rect extends Shape{
         this.angle = angle;
         this.type = "Rect";
         this.vertices = this.getVertices();
-        //this.setRandomMovement();
     }
     draw(){
         globals.ctx.save();

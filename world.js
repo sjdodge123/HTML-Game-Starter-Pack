@@ -30,22 +30,22 @@ class World extends Rect{
         globals.ctx.stroke();
         globals.ctx.restore();
     }
-    testCircle(shape){
-        if(shape.newX - shape.radius < this.x){
-    		shape.newX = shape.x;
+    keepInBounds(shape){
+        if(shape.x - shape.radius < this.x + this.offsetX){
+    		//shape.newX = shape.x;
     		shape.velX = -shape.velX;
     	}
-    	if(shape.newX + shape.radius > this.x + this.width){
-    		shape.newX = shape.x;
+    	if(shape.x + shape.radius > this.x + this.width + this.offsetX){
+    		//shape.newX = shape.x;
     		shape.velX = -shape.velX;
     	}
-    	if (shape.newY - shape.radius < this.y){
-    		shape.newY = shape.y;
+    	if (shape.y - shape.radius < this.y + this.offsetY){
+    		//shape.newY = shape.y;
     		shape.velY = -shape.velY;
     	}
-    	if(shape.newY + shape.radius > this.y + this.height){
-    		shape.newY = shape.y;
-    		shape.velY = -shape.velY;;
+    	if(shape.y + shape.radius > this.y + this.length + this.offsetY){
+    		//shape.newY = shape.y;
+    		shape.velY = -shape.velY;
     	}
     }
 }

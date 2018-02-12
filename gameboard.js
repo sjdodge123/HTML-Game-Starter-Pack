@@ -4,8 +4,13 @@ class Gameboard {
         this.selectedUnit = null;
         this.selectedUnits = [];
         this.pieces = [];
-        this.pieces.push(new Circle(100,100,"blue",50));
-        this.pieces.push(new Rect(500,500,"red",100,100,0));
+        var redCircle = new Circle(100,100,"red",50);
+        var blueCircle = new Circle(500,425,"blue",75)
+        redCircle.setRandomMovement();
+        blueCircle.setRandomMovement();
+        this.pieces.push(redCircle);
+        this.pieces.push(blueCircle);
+        //this.pieces.push(new Rect(500,500,"red",100,100,0));
     }
     update(dt){
         this.dt = dt;
@@ -15,8 +20,9 @@ class Gameboard {
                 continue;
             }
             this.pieces[i].update(dt);
+            globals.world.keepInBounds(this.pieces[i]);
         }
-        //this.checkCollisions();
+        this.checkCollisions();
     }
     addPiece(object){
         this.pieces.push(object);
@@ -34,7 +40,6 @@ class Gameboard {
 
         for(var piece in this.pieces){
             if(loc.inBounds(this.pieces[piece])){
-                console.log("Found piece in range");
                 var lastDistance = globals.utils.findDistance(this.pieces[piece],loc);
                 if(lastDistance <= 0 && lastDistance < minDistanceSq){
                     minDistanceSq = lastDistance;
