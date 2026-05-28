@@ -1,0 +1,15 @@
+{
+    "name": "html-game-starter-pack",
+    "version": "1.0.0",
+    "description": "A minimal server-authoritative multiplayer game skeleton (Node + Socket.IO + canvas).",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "license": "MIT",
+    "dependencies": {
+        "compression": "^1.7.4",
+        "express": "^5.2.1",
+        "socket.io": "^4.1.3"
+    }
+}

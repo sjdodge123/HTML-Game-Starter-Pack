@@ -1,0 +1,20 @@
+{
+    "port": 3000,
+    "serverTickSpeed": 33.33,
+    "worldWidth": 1366,
+    "worldHeight": 768,
+    "minPlayersToStart": 1,
+    "maxPlayersInRoom": 25,
+    "playerBaseRadius": 12,
+    "playerBaseAcel": 375,
+    "playerMaxSpeed": 500,
+    "playerDragCoeff": 0.15,
+    "playerBrakeCoeff": 0.235,
+    "wallBounceDamping": 0.8,
+    "quadTreeMaxDepth": 5,
+    "quadTreeMaxCount": 4,
+    "stateMap": {
+        "waiting": 0,
+        "playing": 1
+    }
+}
