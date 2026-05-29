@@ -1,76 +1,120 @@
 // Client bootstrap + render loop.
 //
-// The client is a THIN presentation layer over the server's authoritative
-// simulation. It owns no physics: it connects, reports input, receives snapshots,
-// and draws them. This file holds the shared globals (loaded in order by the raw
-// <script> tags in play.html) and the requestAnimationFrame render loop.
+// The client is a thin presentation layer over the server's authoritative sim,
+// with ONE exception: it predicts its own player locally for responsive controls
+// (see prediction.js). It connects, reports input, receives snapshots, reconciles
+// its prediction, interpolates remote entities, and draws — owning no authoritative
+// physics. This file holds the shared globals (loaded in order by play.html's raw
+// <script> tags) and the requestAnimationFrame loop that drives prediction +
+// rendering.
 
-var server = null,      // the Socket.IO connection
-    myID = null,        // this client's id (also keys our own player in playerList)
-    config = null,      // the shared config, delivered by the server on join
-    playerList = {},    // id -> rendered player ({ x, y, tx, ty, color, radius })
-    world = null,       // the arena rect { x, y, width, height }
+// Must match server config.protocolVersion. A mismatch means the client was built
+// against a different wire layout (compressor/decoder lockstep) — refuse to run.
+var CLIENT_PROTOCOL_VERSION = 1;
+
+var server = null,
+    myID = null,
+    config = null,
+    world = null,
+    entities = {},      // id -> { type, x, y, tx, ty, velX, velY, color, radius }
+    obstacles = [],     // decoded static geometry
     currentState = null,
+    serverTick = 0,
     gameRunning = false,
-    then = 0;
+    protocolOK = true;
 
-// Held-input flags, mutated by input.js and emitted to the server.
+// Held input flags, mutated by input.js, sampled by the prediction loop.
 var moveForward = false,
     moveBackward = false,
     turnLeft = false,
     turnRight = false;
 
+// Timing.
+var lastFrameTime = 0,
+    predictionAccumulator = 0,
+    FIXED_DT_MS = 33.33,        // set from config on join
+    FIXED_DT_S = 0.03333;
+
 var gameCanvas = document.getElementById('gameCanvas');
 var gameContext = gameCanvas.getContext('2d');
+var dpr = window.devicePixelRatio || 1;
 
-// --- Boot --------------------------------------------------------------------
-// Connect, wire the handlers (client.js), then ask to be matchmade into a room.
-// The server replies with a gameState snapshot, which starts the render loop.
 function boot() {
     server = io();
     registerHandlers(server);
     server.on('connect', function () {
-        // -1 = "find me any room with space" (server.findARoom).
-        server.emit('enterGame', -1);
+        server.emit('enterGame', -1); // -1 = matchmake into any room with space
     });
 }
 
-// --- Client-side motion smoothing --------------------------------------------
-// The server broadcasts positions at its tick rate (~30Hz); rendering at 60fps
-// would visibly STEP if we drew those raw. So each player carries a smoothing
-// TARGET (tx/ty) — the latest server position — and we ease the RENDER position
-// (x/y) toward it each frame. A large jump (a fresh spawn) snaps instead of
-// sliding. Easing, not extrapolation: the sim is authoritative and collision-
-// heavy, so guessing ahead would overshoot into walls and rubber-band.
-var SMOOTH_TAU = 40;        // ms — ~3 frames to catch up
-var SMOOTH_SNAP_DIST = 200; // px — beyond this is a teleport/spawn, so snap
-function smoothPos(o, dt) {
-    if (o == null || o.tx == null) { return; }
-    if (o.x == null || o.y == null) { o.x = o.tx; o.y = o.ty; return; }
-    var dx = o.tx - o.x, dy = o.ty - o.y;
-    if (dx * dx + dy * dy > SMOOTH_SNAP_DIST * SMOOTH_SNAP_DIST) {
-        o.x = o.tx; o.y = o.ty; return;
-    }
-    var a = 1 - Math.exp(-dt / SMOOTH_TAU); // dt >> tau (tab refocus) -> a -> 1, no overshoot
-    o.x += dx * a;
-    o.y += dy * a;
+// Size the canvas backing store for the device pixel ratio so rendering is crisp
+// on HiDPI displays, while we keep drawing in logical (viewW × viewH) coordinates.
+function resize() {
+    dpr = window.devicePixelRatio || 1;
+    gameCanvas.width = camera.viewW * dpr;
+    gameCanvas.height = camera.viewH * dpr;
+    gameCanvas.style.width = camera.viewW + 'px';
+    gameCanvas.style.height = camera.viewH + 'px';
 }
-function smoothEntities(dt) {
-    if (!(dt > 0)) { return; }
-    for (var id in playerList) {
-        smoothPos(playerList[id], dt);
+
+// --- Remote entity interpolation --------------------------------------------
+// Remote entities ease their render position (x/y) toward the latest server
+// position (tx/ty), so 30Hz snapshots don't render as visible stepping at 60fps.
+// A big jump (spawn/teleport) snaps. The LOCAL player is excluded — it's driven by
+// prediction, not interpolation.
+var SMOOTH_TAU = 40, SMOOTH_SNAP_DIST = 200;
+function interpolateRemote(dt) {
+    for (var id in entities) {
+        if (id === myID) { continue; }
+        var e = entities[id];
+        if (e.tx == null) { continue; }
+        if (e.x == null) { e.x = e.tx; e.y = e.ty; continue; }
+        var ddx = e.tx - e.x, ddy = e.ty - e.y;
+        if (ddx * ddx + ddy * ddy > SMOOTH_SNAP_DIST * SMOOTH_SNAP_DIST) {
+            e.x = e.tx; e.y = e.ty; continue;
+        }
+        var a = 1 - Math.exp(-dt / SMOOTH_TAU);
+        e.x += ddx * a;
+        e.y += ddy * a;
     }
 }
 
-// --- Render loop -------------------------------------------------------------
 function animloop() {
     if (!gameRunning) { return; }
     var now = Date.now();
-    var dt = now - then;
-    then = now;
-    smoothEntities(dt);
+    var frameDt = now - lastFrameTime;
+    lastFrameTime = now;
+    if (frameDt > 250) { frameDt = 250; } // tab was backgrounded — don't fast-forward a huge burst
+
+    // Prediction runs on the SAME fixed timestep as the server. Each step: sample
+    // held input, advance the predicted local player, and send the input upstream.
+    predictionAccumulator += frameDt;
+    var steps = 0;
+    while (predictionAccumulator >= FIXED_DT_MS && steps < 10) {
+        var input = { moveForward: moveForward, moveBackward: moveBackward, turnLeft: turnLeft, turnRight: turnRight };
+        var pkt = predictStep(input, FIXED_DT_S);
+        if (pkt != null && server != null) {
+            server.emit('movement', pkt);
+        }
+        predictionAccumulator -= FIXED_DT_MS;
+        steps++;
+    }
+
+    // Local player renders from its predicted state; remotes from interpolation.
+    if (myID != null && entities[myID] != null && predicted != null) {
+        entities[myID].x = predicted.x;
+        entities[myID].y = predicted.y;
+    }
+    interpolateRemote(frameDt);
+
+    // Camera follows the local player.
+    if (myID != null && entities[myID] != null) {
+        cameraFollow(entities[myID].x, entities[myID].y);
+    }
+
     drawObjects();
     requestAnimFrame(animloop);
 }
 
+window.addEventListener('resize', resize);
 window.addEventListener('load', boot);

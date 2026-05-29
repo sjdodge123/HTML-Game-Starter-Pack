@@ -32,27 +32,16 @@ function makePlayers(n) {
     return map;
 }
 function randomizeInput(p) {
-    p.moveForward = rnd() < 0.4;
-    p.moveBackward = !p.moveForward && rnd() < 0.3;
-    p.turnLeft = rnd() < 0.4;
-    p.turnRight = !p.turnLeft && rnd() < 0.3;
+    var i = p.currentInput;
+    i.moveForward = rnd() < 0.4;
+    i.moveBackward = !i.moveForward && rnd() < 0.3;
+    i.turnLeft = rnd() < 0.4;
+    i.turnRight = !i.turnLeft && rnd() < 0.3;
 }
 
-// One full tick of simulation, however the engine exposes it.
+// One full tick of simulation (one fixed step over the entities, no statics).
 function tick(engine, map, players) {
-    if (typeof engine.step === 'function') {
-        engine.step(FIXED_DT, WORLD, players);
-        return;
-    }
-    // Legacy path: mirror the original game.simulate ordering.
-    engine.update(FIXED_DT);
-    for (var i = 0; i < players.length; i++) {
-        _engine.bounceOffBoundry(players[i], WORLD);
-        players[i].cvX = players[i].velX; players[i].cvY = players[i].velY;
-        players[i].hitThisTick = {};
-    }
-    engine.broadBase(players);
-    for (var j = 0; j < players.length; j++) { players[j].move(); }
+    engine.step(FIXED_DT, WORLD, players);
 }
 
 function bench(n, ticks) {

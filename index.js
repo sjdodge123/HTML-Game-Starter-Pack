@@ -21,6 +21,9 @@ app.use(compression());
 // Serve the raw client as-is — no bundler, no build step. The browser loads the
 // individual <script> tags in client/play.html directly (chaochao's dev mode).
 app.use(express.static(path.join(__dirname, 'client')));
+// The shared movement integrator lives outside client/ because the server requires
+// it too (shared/movement.js). Expose it at /shared so the client can <script> it.
+app.use('/shared', express.static(path.join(__dirname, 'shared')));
 
 var utils = require('./server/utils.js');
 var messenger = require('./server/messenger.js');

@@ -1,4 +1,5 @@
 {
+    "protocolVersion": 1,
     "port": 3000,
     "serverTickSpeed": 33.33,
     "maxSubStepsPerTick": 5,
@@ -12,8 +13,14 @@
     "playerDragCoeff": 0.15,
     "playerBrakeCoeff": 0.235,
     "wallBounceDamping": 0.8,
+    "pickupCount": 4,
+    "pickupRadius": 9,
+    "pickupSpeed": 160,
+    "pickupColor": "#ffd23f",
+    "obstacleColor": "#5a5a66",
     "quadTreeMaxDepth": 5,
     "quadTreeMaxCount": 4,
+    "gameMode": "arena",
     "stateMap": {
         "waiting": 0,
         "playing": 1

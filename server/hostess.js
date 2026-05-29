@@ -9,7 +9,11 @@ var utils = require('./utils.js');
 var c = utils.loadConfig();
 var game = require('./game.js');
 
-var roomList = {},
+// Object.create(null): a prototype-less map so a client-influenced signature can
+// never resolve to an inherited property (e.g. "__proto__"/"constructor"). The
+// sig is also validated to a 0–999 integer in messenger before it reaches here —
+// belt and braces.
+var roomList = Object.create(null),
     maxPlayersInRoom = c.maxPlayersInRoom;
 
 // Find a room with free space, creating one if none exists / none is free.

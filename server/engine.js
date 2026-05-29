@@ -6,10 +6,12 @@
 // game-specific physics (Voronoi tile/cell collision, punches, pucks, cuts,
 // explosions, projectiles, moving hazards). The skeleton keeps the entity-vs-entity
 // core and DROPS everything map/ability/projectile-shaped:
-//   - Engine.step : one fixed-timestep step — integrate, wall-bounce, collide,
+//   - Engine.step : one fixed-timestep step — control(), wall-bounce, collide,
 //                   commit. Called N times per tick by Game.simulate's accumulator.
-//   - Engine.integrate : input -> velocity -> scratch position for one entity.
-//   - broadBase / narrowBase : QuadTree broad-phase, then per-pair handleHit().
+//                   Per-entity motion lives in Entity.control()/Player.control()
+//                   (the latter via the shared integrator); the engine orchestrates.
+//   - broadBase / narrowBase : QuadTree broad-phase (dynamic + static), per-pair
+//                   handleHit(); statics are tested but never initiate.
 //   - QuadTree : the spatial index that keeps collision O(n log n), not O(n^2).
 //   - bounceOffBoundry / checkDistance : keep entities in the arena.
 //
@@ -20,6 +22,8 @@
 
 var utils = require('./utils.js');
 var c = utils.loadConfig();
+
+var EMPTY = []; // shared empty array for the "no statics" default (never mutated)
 
 exports.getEngine = function (playerList) {
     return new Engine(playerList);
@@ -39,101 +43,51 @@ class Engine {
         this.worldWidth = 0;
         this.worldHeight = 0;
     }
-    // Advance the simulation by ONE fixed timestep over `players` (a prebuilt
-    // array of the alive entities to simulate). This is the whole physics step:
-    //   1. integrate each entity's input into velocity and position,
+    // Advance the simulation by ONE fixed timestep. `entities` is the prebuilt
+    // array of alive DYNAMIC bodies (players, pickups, …); `statics` is the array
+    // of immovable obstacles (level geometry). The whole physics step:
+    //   1. each entity drives its own velocity + scratch position (control()),
     //   2. keep each inside the world (wall bounce),
     //   3. snapshot pre-collision velocity + reset the per-step pair guard,
-    //   4. broad/narrow-phase resolve entity-vs-entity collisions,
+    //   4. broad/narrow-phase resolve entity-vs-entity and entity-vs-obstacle,
     //   5. commit the scratch position to the authoritative position.
-    // `players` is an ARRAY, not the playerList object: the caller (Game.simulate)
-    // builds it once per tick and reuses it across sub-steps. Iterating an array
-    // is meaningfully cheaper than a `for..in` over the playerList map on V8's hot
-    // path, and it lets the fixed-timestep accumulator run N sub-steps without
-    // rebuilding the set each time.
-    step(dt, world, players) {
+    // Both lists are ARRAYS, built once per tick by Game.simulate and reused across
+    // sub-steps — iterating an array is cheaper than a `for..in` over a map on V8's
+    // hot path, and the accumulator can run N sub-steps without rebuilding the set.
+    step(dt, world, entities, statics) {
         this.dt = dt;
-        for (var i = 0; i < players.length; i++) {
-            var p = players[i];
-            this.integrate(p, dt);
-            bounceOffBoundry(p, world);
-            // Snapshot for the symmetric collision response (see Player.handleHit),
-            // and clear the "already bounced this step" pair guard.
-            p.cvX = p.velX;
-            p.cvY = p.velY;
-            p.hitThisTick = {};
+        statics = statics || EMPTY;
+        for (var i = 0; i < entities.length; i++) {
+            var e = entities[i];
+            e.control(dt);                 // entity updates its own velocity + scratch position
+            bounceOffBoundry(e, world);    // keep it inside the arena
+            // Snapshot for the symmetric collision response (see Entity.handleHit),
+            // and clear the "already resolved this step" pair guard.
+            e.cvX = e.velX;
+            e.cvY = e.velY;
+            e.hitThisTick = {};
         }
-        this.broadBase(players);
-        for (var j = 0; j < players.length; j++) {
-            players[j].move();
+        this.broadBase(entities, statics);
+        for (var j = 0; j < entities.length; j++) {
+            entities[j].move();
         }
     }
-    // Integrate one entity's input into velocity, and velocity into the SCRATCH
-    // position (newX/newY) — the authoritative x/y isn't committed until move()
-    // runs after collision resolution, so collision tests see the about-to-be
-    // position. Input is four booleans mapped to a unit drive direction. This is
-    // chaochao's integration, stripped of the AI branch, the stamina/exhaustion
-    // drive penalty, and speed/drag bonuses. With a FIXED dt (see Game.simulate)
-    // the velocity/drag update is deterministic and free of tick-jitter wobble.
-    integrate(player, dt) {
-        var dirX = 0;
-        var dirY = 0;
-        var braking = false;
-        if (player.moveForward && !player.moveBackward && !player.turnLeft && !player.turnRight) {
-            dirY = -1;
-        } else if (!player.moveForward && player.moveBackward && !player.turnLeft && !player.turnRight) {
-            dirY = 1;
-        } else if (!player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
-            dirX = -1;
-        } else if (!player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
-            dirX = 1;
-        } else if (player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
-            dirY = -Math.SQRT1_2; dirX = -Math.SQRT1_2;
-        } else if (player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
-            dirY = -Math.SQRT1_2; dirX = Math.SQRT1_2;
-        } else if (!player.moveForward && player.moveBackward && player.turnLeft && !player.turnRight) {
-            dirY = Math.SQRT1_2; dirX = -Math.SQRT1_2;
-        } else if (!player.moveForward && player.moveBackward && !player.turnLeft && player.turnRight) {
-            dirY = Math.SQRT1_2; dirX = Math.SQRT1_2;
-        } else {
-            braking = true;
-        }
-
-        var newVelX = player.velX + player.acel * dirX * dt;
-        var newVelY = player.velY + player.acel * dirY * dt;
-
-        if (braking) {
-            newVelX -= player.brakeCoeff * player.velX;
-            newVelY -= player.brakeCoeff * player.velY;
-        } else {
-            newVelX -= player.dragCoeff * player.velX;
-            newVelY -= player.dragCoeff * player.velY;
-        }
-
-        var newVel = utils.getMag(newVelX, newVelY);
-        if (newVel > player.maxVelocity) {
-            // newVel > maxVelocity > 0, so this division is always safe (no 0/0).
-            var scale = player.maxVelocity / newVel;
-            player.velX = newVelX * scale;
-            player.velY = newVelY * scale;
-        } else {
-            player.velX = newVelX;
-            player.velY = newVelY;
-        }
-        player.newX += player.velX * dt;
-        player.newY += player.velY * dt;
-    }
-    // Broad-phase: rebuild the QuadTree from this tick's entities, then for each
-    // entity retrieve only the candidates sharing its quadrant and narrow-phase
-    // those. This keeps collision near O(n log n) instead of the O(n^2) all-pairs
-    // scan a naive loop would do.
-    broadBase(objectArray) {
+    // Broad-phase: rebuild the QuadTree from this step's bodies (dynamic + static),
+    // then for each DYNAMIC body retrieve only the candidates sharing its quadrant
+    // and narrow-phase those. Statics are inserted (so dynamic bodies find them) but
+    // never initiate, so static-vs-static pairs are never tested. This keeps
+    // collision near O(n log n) instead of the O(n^2) all-pairs scan.
+    broadBase(dynamic, statics) {
+        statics = statics || EMPTY;
         this.quadTree.clear();
-        for (var i = 0; i < objectArray.length; i++) {
-            this.quadTree.insert(objectArray[i]);
+        for (var i = 0; i < dynamic.length; i++) {
+            this.quadTree.insert(dynamic[i]);
         }
-        for (var j = 0; j < objectArray.length; j++) {
-            var obj1 = objectArray[j];
+        for (var s = 0; s < statics.length; s++) {
+            this.quadTree.insert(statics[s]);
+        }
+        for (var j = 0; j < dynamic.length; j++) {
+            var obj1 = dynamic[j];
             var collisionList = [];
             collisionList = this.quadTree.retrieve(collisionList, obj1);
             this.narrowBase(obj1, collisionList);

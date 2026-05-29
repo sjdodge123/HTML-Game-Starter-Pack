@@ -1,14 +1,11 @@
 'use strict';
-// Room + Game — chaochao's game.js gutted from a ~1200-line race director down to
-// the simulation loop and a two-state machine.
+// Room + Game.
 //
-// A Room owns one isolated match: its client list, its player list, its physics
-// engine, its world, and its Game. The Game holds the state machine and runs the
-// per-tick simulation. chaochao's Game ran a full round lifecycle (waiting →
-// lobby → gated → racing → collapsing → overview → gameOver) with scoring, music,
-// bots, abilities, and map rotation. The skeleton keeps two states:
-//   waiting  — fewer than minPlayersToStart connected; the sim is idle.
-//   playing  — enough players; the engine integrates and broadcasts every tick.
+// A Room owns one isolated match: its connected clients, its dynamic entities, its
+// physics engine, its world (arena + static geometry), and its Game. The Game runs
+// the fixed-timestep simulation and hosts a pluggable GAME MODE — the seam where
+// your actual game lives (see modes/). The engine/compressor stay game-agnostic;
+// the mode decides what spawns, what the rules are, and when someone wins.
 
 var utils = require('./utils.js');
 var c = utils.loadConfig();
@@ -17,16 +14,18 @@ var _engine = require('./engine.js');
 var compressor = require('./compressor.js');
 var { World } = require('./entities/world.js');
 
-// Fixed-timestep simulation constants. The sim always advances in constant
-// FIXED_DT increments regardless of how jittery the real tick interval is, so
-// physics is deterministic and dt-invariant (no tick-jitter wobble, no tunnelling
-// from an occasional long tick). FIXED_DT is the nominal tick interval, so under
-// normal scheduling there's exactly ONE sub-step per tick and the game feel is
-// identical to a plain per-tick update — the accumulator only matters when a tick
-// runs long or short. MAX_SUBSTEPS caps the catch-up so a long stall (GC, the
-// process being descheduled) causes a brief slowdown instead of a death spiral.
+// Fixed-timestep constants (see Game.simulate). FIXED_DT is the nominal tick
+// interval, so normal scheduling runs exactly one sub-step per tick and the game
+// feel matches a plain per-tick update; the accumulator only matters under jitter.
+// MAX_SUBSTEPS caps catch-up so a long stall is a brief slowdown, not a spiral.
 var FIXED_DT = c.serverTickSpeed / 1000;
 var MAX_SUBSTEPS = c.maxSubStepsPerTick;
+
+// Load the configured game mode. Modes are small factories under server/modes/.
+function loadMode(name) {
+    var factory = require('./modes/' + name + '.js');
+    return factory();
+}
 
 exports.getRoom = function (sig, size) {
     return new Room(sig, size);
@@ -37,24 +36,36 @@ class Room {
         this.sig = sig;
         this.size = size;
         this.clientList = {};
-        this.playerList = {};
+        this.playerList = {};   // clientId -> Player (the socket<->player mapping)
         this.clientCount = 0;
-        this.engine = _engine.getEngine(this.playerList);
+        this.engine = _engine.getEngine();
         this.world = new World(0, 0, c.worldWidth, c.worldHeight, this.engine, this.playerList, this.sig);
-        // The engine's QuadTree is sized to the arena once, up front.
         this.engine.setWorldBounds(this.world.width, this.world.height);
         this.game = new Game(this.clientList, this.playerList, this.world, this.engine, this.sig);
     }
-    // Socket-room plumbing: join/leave the Socket.IO room so broadcasts reach this
-    // client, and track how many clients the room holds.
     join(clientID) {
         var client = messenger.getClient(clientID);
         messenger.addRoomToMailBox(clientID, this.sig);
         client.join(String(this.sig));
         this.clientCount++;
     }
+    // Create + register this client's player and notify the mode. The caller
+    // (messenger.enterGame) sends the joiner the full snapshot and broadcasts the
+    // new player to everyone else.
+    spawnPlayer(clientID) {
+        var player = this.world.createNewPlayer(clientID);
+        this.playerList[clientID] = player;
+        this.game.registerEntity(player);
+        this.game.mode.onPlayerJoin(this.game, player);
+        return player;
+    }
     leave(clientID) {
-        messenger.messageRoomBySig(this.sig, 'playerLeft', clientID);
+        var player = this.playerList[clientID];
+        if (player != null) {
+            this.game.mode.onPlayerLeave(this.game, clientID);
+        }
+        this.game.unregisterEntity(clientID);
+        messenger.messageRoomBySig(this.sig, 'entityDespawn', clientID);
         messenger.removeRoomMailBox(clientID);
         var client = messenger.getClient(clientID);
         if (client != null) {
@@ -64,17 +75,19 @@ class Room {
         delete this.playerList[clientID];
         this.clientCount--;
     }
-    // One server tick: advance the simulation, then broadcast the new snapshot.
     update(dt) {
         this.game.update(dt);
         this.sendUpdates();
     }
-    // Broadcast this tick's authoritative snapshot to every client in the room.
-    // This is the heartbeat clients render from — they own no physics of their own.
+    // Broadcast this tick's authoritative snapshot: every dynamic entity's state,
+    // the game state, and the server tick number (the client uses it for
+    // interpolation/ordering; the per-entity input ack rides inside the entity
+    // rows for prediction reconciliation).
     sendUpdates() {
         messenger.messageRoomBySig(this.sig, 'gameUpdates', {
-            playerList: compressor.sendPlayerUpdates(this.playerList),
+            entityList: compressor.sendEntityUpdates(this.game.entities),
             state: compressor.gameState(this.game),
+            tick: this.game.tick,
             totalPlayers: this.game.playerCount
         });
     }
@@ -93,56 +106,84 @@ class Game {
         this.world = world;
         this.engine = engine;
         this.roomSig = roomSig;
+        this.entities = {};     // id -> dynamic entity (players + mode-spawned things)
+        this.tick = 0;          // monotonic sim step counter, stamped into snapshots
         this.playerCount = 0;
         this.stateMap = c.stateMap;
         this.currentState = this.stateMap.waiting;
-        // Leftover real time not yet consumed by a fixed sub-step; carried to the
-        // next tick so the sim tracks wall-clock time smoothly (see simulate).
-        this.accumulator = 0;
+        this.accumulator = 0;   // leftover real time carried between ticks
+        this.mode = loadMode(c.gameMode);
+    }
+    // Entity bookkeeping. registerEntity/unregisterEntity are the quiet versions
+    // (used for players, whose spawn/despawn the room broadcasts as part of
+    // join/leave); spawnEntity/despawnEntity also broadcast, for things the mode
+    // creates/removes mid-game (e.g. pickups).
+    registerEntity(e) { this.entities[e.id] = e; }
+    unregisterEntity(id) { delete this.entities[id]; }
+    spawnEntity(e) {
+        this.registerEntity(e);
+        messenger.messageRoomBySig(this.roomSig, 'entitySpawn', compressor.appendEntity(e));
+    }
+    despawnEntity(id) {
+        this.unregisterEntity(id);
+        messenger.messageRoomBySig(this.roomSig, 'entityDespawn', id);
     }
     update(dt) {
         this.getPlayerCount();
-        // The state machine: flip between waiting and playing on the player count.
         if (this.currentState == this.stateMap.waiting) {
             if (this.playerCount >= c.minPlayersToStart) {
                 this.currentState = this.stateMap.playing;
+                this.mode.onStart(this);
             }
-            return; // idle while waiting — nothing to simulate
+            return; // idle while waiting
         }
         if (this.currentState == this.stateMap.playing) {
             if (this.playerCount < c.minPlayersToStart) {
                 this.currentState = this.stateMap.waiting;
+                this.mode.onStop(this);
+                this.clearNonPlayers();
                 return;
             }
             this.simulate(dt);
+            this.mode.onTick(this, dt);
         }
     }
-    // The authoritative tick, driven by a fixed-timestep accumulator. We add the
-    // real elapsed time to the accumulator and drain it in constant FIXED_DT
-    // sub-steps, so the physics integrator always sees the same dt no matter how
-    // uneven the real tick interval is. The alive-players array is built ONCE here
-    // and reused across every sub-step (the set can't change mid-tick), keeping the
-    // per-step hot path on an array rather than a for..in over the playerList map.
+    // Fixed-timestep accumulator: advance the sim in constant FIXED_DT sub-steps so
+    // physics is deterministic and independent of real tick jitter. The dynamic
+    // entity array + the static obstacle array are passed to engine.step; the
+    // dynamic array is rebuilt once per tick (cheap; the set is stable mid-tick).
     simulate(dt) {
-        var players = [];
-        for (var id in this.playerList) {
-            if (this.playerList[id].alive) {
-                players.push(this.playerList[id]);
+        var entities = [];
+        for (var id in this.entities) {
+            if (this.entities[id].alive) {
+                entities.push(this.entities[id]);
             }
         }
+        var statics = this.world.obstacles;
 
         this.accumulator += dt;
-        // Anti-spiral clamp: never try to catch up more than MAX_SUBSTEPS worth of
-        // time in one tick. A long stall is absorbed as a brief slowdown, not a
-        // burst of steps that stalls the loop further.
         var maxAccumulated = FIXED_DT * MAX_SUBSTEPS;
         if (this.accumulator > maxAccumulated) {
             this.accumulator = maxAccumulated;
         }
         while (this.accumulator >= FIXED_DT) {
-            // engine.step owns one full step: integrate, wall-bounce, collide, commit.
-            this.engine.step(FIXED_DT, this.world, players);
+            this.engine.step(FIXED_DT, this.world, entities, statics);
+            this.tick++;
             this.accumulator -= FIXED_DT;
+        }
+    }
+    // Drop everything the mode spawned when the match winds back to waiting, so a
+    // fresh start (onStart) doesn't accumulate stale entities. Broadcasts the
+    // despawns so clients clear them too.
+    clearNonPlayers() {
+        var ids = [];
+        for (var id in this.entities) {
+            if (this.entities[id].type !== 'player') {
+                ids.push(id);
+            }
+        }
+        for (var i = 0; i < ids.length; i++) {
+            this.despawnEntity(ids[i]);
         }
     }
     getPlayerCount() {

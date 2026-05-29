@@ -1,12 +1,14 @@
-// Client math helpers — the browser-side counterparts to the server's utils.js.
-// Kept tiny on purpose; the skeleton's rendering only needs a couple of these.
+// Client math/helpers — browser-side counterparts to the server's utils.js.
 
 function getMag(x, y) {
     return Math.sqrt(x * x + y * y);
 }
 
-// requestAnimationFrame with a setTimeout fallback for very old browsers, so the
-// render loop in game.js has something to call regardless of vendor prefixes.
+function clamp(v, lo, hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// requestAnimationFrame with a setTimeout fallback for very old browsers.
 var requestAnimFrame = (function () {
     return window.requestAnimationFrame ||
         window.webkitRequestAnimationFrame ||

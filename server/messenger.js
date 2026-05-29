@@ -1,30 +1,28 @@
 'use strict';
-// Messenger — chaochao's messenger.js, the socket boundary. Every inbound socket
-// event is wired here, and every outbound room/client message goes through here.
-// Trimmed from chaochao's ~30 handlers (auth skins, emoji, map submission, lobby
-// AI, diagnostics, ...) to the four that a movement skeleton needs:
-//   getConfig    — ship the shared config to the client (single source of truth).
-//   enterGame    — matchmake the client into a room and spawn its player.
-//   movement     — record this client's held input on its server-side player.
-//   disconnect   — handled in index.js, which calls hostess.kickFromRoom.
+// Messenger — the socket boundary. Inbound socket events are wired here; outbound
+// room/client messages go through here. Handlers:
+//   getConfig    — ship the shared config (single source of truth) to the client.
+//   enterGame    — matchmake into a room and spawn the client's player; reply with
+//                  the full join snapshot (entities, obstacles, world, config).
+//   movement     — record the client's held input + sequence number on its player.
+//   playerLeaveRoom / disconnect — tear the client out of its room.
 //
-// A "mailbox" is just the live socket, stored by client id so any module can
-// message a client by id without holding the socket itself.
+// All client-supplied values are treated as untrusted: the room id is validated to
+// a numeric signature, and input is range/sequence-checked.
 
 var utils = require('./utils.js');
 var c = utils.loadConfig();
 var hostess = require('./hostess.js');
 var compressor = require('./compressor.js');
 
-var mailBoxList = {},   // clientId -> socket
-    roomMailList = {},  // clientId -> roomSig
+var mailBoxList = Object.create(null),   // clientId -> socket
+    roomMailList = Object.create(null),  // clientId -> roomSig
     io;
 
 exports.build = function (mainIO) {
     io = mainIO;
 };
 
-// Register a connected socket and wire its event handlers.
 exports.addMailBox = function (id, client) {
     mailBoxList[id] = client;
     checkForMail(mailBoxList[id]);
@@ -50,67 +48,86 @@ exports.messageClientBySig = function (sig, header, payload) {
     }
 };
 
-// Wire the per-socket handlers. Called once per connection.
+// Validate the client-supplied room id: -1 (matchmake) or a non-negative integer
+// signature. Anything else (floats, strings like "__proto__", huge values) is
+// rejected — the server never indexes roomList with an unvalidated client value.
+function parseRoomId(raw) {
+    if (raw === -1 || raw === '-1') {
+        return -1;
+    }
+    var n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 999) {
+        return null;
+    }
+    return n;
+}
+
 function checkForMail(client) {
-    // Let the client confirm its own id.
     client.emit('welcome', client.id);
 
-    // The client asks for the shared config (tuning values, world size, stateMap)
-    // up front. Shipping the SAME config object the server simulates with is what
-    // keeps the two halves from forking their numbers.
     client.on('getConfig', function () {
         client.emit('config', c);
     });
 
-    // Matchmake into a room and spawn this client's player.
     client.on('enterGame', function (id) {
-        var roomSig = (id == -1) ? hostess.findARoom() : id;
-        var room = hostess.joinARoom(roomSig, client.id);
-        if (room == false) {
+        var roomId = parseRoomId(id);
+        if (roomId === null) {
             client.emit('roomNotFound');
             return;
         }
-        // Track the client in the room and spawn its server-side player.
+        var roomSig = (roomId === -1) ? hostess.findARoom() : roomId;
+        var room = hostess.joinARoom(roomSig, client.id);
+        if (room === false) {
+            client.emit('roomNotFound');
+            return;
+        }
         room.clientList[client.id] = client.id;
-        room.playerList[client.id] = room.world.createNewPlayer(client.id);
+        var player = room.spawnPlayer(client.id);
 
-        // Send the joining client the full current snapshot: who's here, the arena,
-        // the state, and its own id.
+        // Full join snapshot. protocolVersion lets the client refuse a mismatched
+        // server; entities + obstacles + world + state rehydrate a (possibly
+        // mid-game) joiner; config is the single source of truth.
         client.emit('gameState', {
-            playerList: compressor.playerSpawns(room.playerList),
+            protocolVersion: c.protocolVersion,
+            entityList: compressor.entitiesSpawn(room.game.entities),
+            obstacles: compressor.obstacles(room.world.obstacles),
             world: compressor.worldResize(room.world),
             game: compressor.gameState(room.game),
+            tick: room.game.tick,
             config: c,
             myID: client.id,
             gameID: roomSig
         });
 
         // Tell everyone already in the room about the newcomer.
-        client.broadcast.to(String(roomSig)).emit('playerJoin', {
-            id: client.id,
-            player: compressor.appendPlayer(room.playerList[client.id])
-        });
+        client.broadcast.to(String(roomSig)).emit('entitySpawn', compressor.appendEntity(player));
     });
 
-    // The only gameplay input: which movement keys are currently held. The client
-    // is authoritative over NOTHING — it just reports intent, and the engine
-    // decides the resulting motion next tick.
+    // The only gameplay input: the held movement keys plus a monotonically
+    // increasing sequence number. The client is authoritative over NOTHING — it
+    // reports intent; the engine decides the motion. We ignore stale/duplicate
+    // inputs (seq <= last seen) and echo the accepted seq back each tick so the
+    // client can reconcile its prediction.
     client.on('movement', function (packet) {
         var room = hostess.getRoomBySig(roomMailList[client.id]);
-        if (room == undefined) {
+        if (room === undefined || packet == null) {
             return;
         }
         var player = room.playerList[client.id];
-        if (player != null) {
-            player.moveForward = packet.moveForward;
-            player.moveBackward = packet.moveBackward;
-            player.turnLeft = packet.turnLeft;
-            player.turnRight = packet.turnRight;
+        if (player == null) {
+            return;
         }
+        var seq = Number(packet.seq);
+        if (!Number.isFinite(seq) || seq <= player.lastInputSeq) {
+            return; // stale, duplicate, or malformed
+        }
+        player.lastInputSeq = seq;
+        player.currentInput.moveForward = !!packet.moveForward;
+        player.currentInput.moveBackward = !!packet.moveBackward;
+        player.currentInput.turnLeft = !!packet.turnLeft;
+        player.currentInput.turnRight = !!packet.turnRight;
     });
 
-    // A client that explicitly leaves (the page does this on unload as a courtesy;
-    // the socket 'disconnect' in index.js is the real teardown).
     client.on('playerLeaveRoom', function () {
         hostess.kickFromRoom(client.id);
     });

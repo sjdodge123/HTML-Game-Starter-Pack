@@ -1,72 +1,83 @@
 'use strict';
-// Compressor — the SERVER half of the wire contract.
-//
-// Every payload that crosses the socket is packed into POSITIONAL ARRAYS rather
-// than {key: value} objects: at 30 ticks/sec for every player, dropping the JSON
-// keys is a large, free bandwidth win. The cost is that the meaning of each slot
-// lives only in the shared convention between this file and the client decoders.
+// Compressor — the SERVER half of the wire contract. Every payload is packed into
+// POSITIONAL ARRAYS (no JSON keys) to save bandwidth at tick rate. The meaning of
+// each slot lives only in the shared convention between this file and the client
+// decoders.
 //
 // *** THE LOCKSTEP RULE ***
-// The array layouts below are a MATCHED PAIR with the decoders in
-// client/scripts/client.js. If you add, remove, or reorder a slot here, you MUST
-// make the identical change in the matching decoder, or the client will silently
-// read the wrong field. Each packer notes its decoder counterpart.
+// These array layouts are a MATCHED PAIR with the decoders in
+// client/scripts/client.js. Add/remove/reorder a slot here and you MUST mirror it
+// there, or the client silently reads the wrong field. Each packer names its
+// decoder. The protocol is versioned (config.protocolVersion, sent on join) so a
+// client built against a different layout fails loudly instead of misreading.
 
-// Per-tick player state. Hot path: built and broadcast every server tick for
-// every player. Decoder: updatePlayerList() in client.js.
-//   [ id, x, y, velX, velY ]
-exports.sendPlayerUpdates = function (playerList) {
+// --- Per-tick entity state (hot path) ---------------------------------------
+// One row per dynamic entity, every tick. Decoder: updateEntities() in client.js.
+//   [ id, x, y, velX, velY, inputAck ]
+// inputAck is the last input seq the server processed for THIS entity (players
+// only; 0 otherwise) — the owning client uses it to reconcile its prediction.
+exports.sendEntityUpdates = function (entities) {
     var packet = [];
-    for (var id in playerList) {
-        var player = playerList[id];
+    for (var id in entities) {
+        var e = entities[id];
         packet.push([
-            player.id,
-            Math.round(player.x),
-            Math.round(player.y),
-            player.velX,
-            player.velY
+            e.id,
+            Math.round(e.x),
+            Math.round(e.y),
+            e.velX,
+            e.velY,
+            e.lastInputSeq || 0
         ]);
     }
     return packet;
 };
 
-// A full player spawn record. Sent once when a player appears (not per tick), so
-// it carries the static fields (colour, radius) the tick packet omits.
-// Decoder: createPlayer() in client.js.
-//   [ id, x, y, color, radius ]
-function newPlayerPacket(player) {
-    return [
-        player.id,
-        Math.round(player.x),
-        Math.round(player.y),
-        player.color,
-        player.radius
-    ];
+// --- Entity spawn record ----------------------------------------------------
+// The static identity of an entity, sent when it appears (not per tick).
+// Decoder: createEntity() in client.js.
+//   [ type, id, x, y, color, radius ]
+function entitySpawnPacket(e) {
+    return [e.type, e.id, Math.round(e.x), Math.round(e.y), e.color, e.radius];
 }
 
-// Every current player, for a freshly-joined client. Decoder: connectSpawnPlayers().
-exports.playerSpawns = function (playerList) {
+// Every current entity, for a freshly-joined client. Decoder: spawnEntities().
+exports.entitiesSpawn = function (entities) {
     var packet = [];
-    for (var id in playerList) {
-        packet.push(newPlayerPacket(playerList[id]));
+    for (var id in entities) {
+        packet.push(entitySpawnPacket(entities[id]));
     }
     return JSON.stringify(packet);
 };
 
-// One new player, broadcast to everyone already in the room. Decoder: appendNewPlayer().
-exports.appendPlayer = function (player) {
-    return JSON.stringify(newPlayerPacket(player));
+// One entity, broadcast when it spawns mid-game. Decoder: appendEntity().
+exports.appendEntity = function (e) {
+    return JSON.stringify(entitySpawnPacket(e));
 };
 
-// The arena rectangle, sent once on join. Decoder: worldResize() in client.js.
-//   [ x, y, width, height ]
+// --- Static level geometry (sent once on join) ------------------------------
+// Decoder: decodeObstacles() in client.js. Tagged by shape:
+//   circle: [ 'c', x, y, radius, color ]
+//   box:    [ 'b', x, y, width, height, color ]
+exports.obstacles = function (obstacles) {
+    var packet = [];
+    for (var i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        if (o.isBox) {
+            packet.push(['b', o.x, o.y, o.w, o.h, o.color]);
+        } else {
+            packet.push(['c', o.x, o.y, o.radius, o.color]);
+        }
+    }
+    return JSON.stringify(packet);
+};
+
+// --- Arena + state ----------------------------------------------------------
+// World rectangle, sent once on join. Decoder: worldResize().  [ x, y, w, h ]
 exports.worldResize = function (world) {
     return JSON.stringify([world.x, world.y, world.width, world.height]);
 };
 
-// Current game state (the tiny waiting/playing machine). Sent on join and every
-// tick. Decoder: checkGameState() in client.js.
-//   [ currentState ]
+// Game state (the tiny waiting/playing machine). Decoder: checkGameState().  [ state ]
 exports.gameState = function (game) {
     return JSON.stringify([game.currentState]);
 };

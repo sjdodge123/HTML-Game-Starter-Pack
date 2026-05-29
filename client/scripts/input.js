@@ -1,14 +1,14 @@
-// Keyboard input -> movement events.
+// Keyboard input -> held movement flags.
 //
-// The client sends only INTENT: which direction keys are held. It never moves its
-// own kart — the server's engine reads these flags next tick and decides the
-// motion (this is what "server-authoritative" means in practice). WASD and the
-// arrow keys both map to the four directions the server's engine understands.
+// Unlike the first skeleton, input is NOT emitted here. The prediction loop
+// (game.js) samples these held flags every fixed step, applies them locally for
+// instant response, stamps a sequence number, and sends that to the server. This
+// keeps prediction and the network packet perfectly in step (one input per
+// predicted step, each with its own seq for reconciliation).
 
 window.addEventListener('keydown', onKey(true), false);
 window.addEventListener('keyup', onKey(false), false);
 
-// Resolve a keyboard event to one of the four movement intents, or null.
 function keyToAction(e) {
     switch (e.code) {
         case 'KeyW': case 'ArrowUp': return 'moveForward';
@@ -30,20 +30,7 @@ function onKey(pressed) {
             case 'turnLeft': turnLeft = pressed; break;
             case 'turnRight': turnRight = pressed; break;
         }
-        sendMovement();
     };
-}
-
-// Report the full held-key state. Sending on every edge (not on a timer) keeps the
-// payload tiny and the server's view of our input current.
-function sendMovement() {
-    if (server == null) { return; }
-    server.emit('movement', {
-        moveForward: moveForward,
-        moveBackward: moveBackward,
-        turnLeft: turnLeft,
-        turnRight: turnRight
-    });
 }
 
 // Be a good citizen: tell the server we're leaving so the room frees our slot

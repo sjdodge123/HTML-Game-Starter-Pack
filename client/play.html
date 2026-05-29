@@ -3,27 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Multiplayer Skeleton</title>
+    <title>Multiplayer Engine Skeleton</title>
     <style>
-        html, body { margin: 0; height: 100%; background: #1b1b1b; color: #ddd;
+        html, body { margin: 0; height: 100%; background: #14141a; color: #ddd;
             font-family: system-ui, sans-serif; overflow: hidden; }
         #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
-        #gameCanvas { background: #2b2b2b; border: 1px solid #000; max-width: 100%; height: auto; }
+        #gameCanvas { background: #20202a; border: 1px solid #000; }
         #hint { font-size: 13px; opacity: 0.7; }
     </style>
 </head>
 <body>
     <div id="wrap">
-        <div id="hint">Drive with <b>WASD</b> or the <b>arrow keys</b>. Open a second tab to see another player.</div>
-        <canvas id="gameCanvas" width="1366" height="768"></canvas>
+        <div id="hint">Drive with <b>WASD</b> / <b>arrows</b>. Bounce off the walls, the obstacles, the gold pickups, and other players. Open a second tab for a second player.</div>
+        <canvas id="gameCanvas" width="1024" height="576"></canvas>
     </div>
 
-    <!-- Socket.IO client, served by the Socket.IO server mounted on the same port. -->
+    <!-- Socket.IO client, served by the Socket.IO server on the same port. -->
     <script src="/socket.io/socket.io.js"></script>
-    <!-- Raw <script> tags, loaded in dependency order — no bundler, no build step.
-         Each file declares the globals the next ones use (chaochao's dev mode). -->
+    <!-- Shared movement integrator — the SAME code the server runs, so client-side
+         prediction agrees with the authoritative server. Must load before prediction.js. -->
+    <script src="/shared/movement.js"></script>
+    <!-- Raw <script> tags in dependency order — no bundler, no build step. -->
     <script src="scripts/utils.js"></script>
+    <script src="scripts/camera.js"></script>
     <script src="scripts/game.js"></script>
+    <script src="scripts/prediction.js"></script>
     <script src="scripts/client.js"></script>
     <script src="scripts/draw.js"></script>
     <script src="scripts/input.js"></script>

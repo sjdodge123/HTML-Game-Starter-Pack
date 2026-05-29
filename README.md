@@ -1,17 +1,18 @@
-# Server-Authoritative Multiplayer Skeleton
+# Server-Authoritative Multiplayer Game Engine Skeleton
 
-A minimal, runnable **server-authoritative multiplayer game** — the bare bones of a
-real-time game with no actual game on top. Every connected client is a circle they
-drive around a shared arena with WASD / arrow keys; the server simulates everything
-and every client sees everyone else live. It's deliberately just the load-bearing
-structure (one authoritative simulation, a compressed per-tick broadcast, thin
-clients that only render and forward input) so you can graft a real game onto it.
+A small but real foundation for building real-time multiplayer browser games. The
+server is authoritative; clients predict their own movement for responsive controls
+and reconcile against the server's truth. It ships with a generalized entity model,
+static level geometry, client-side prediction, a camera, and a pluggable **game
+mode** seam — the bones you build a game *on*, not a game itself.
 
-This is the [chaochao](https://github.com/sjdodge123/chaochao) racing game with the
-game stripped out — chaochao was itself forked from the 2018 version of this starter
-pack, so this harvests its matured multiplayer architecture back into the starter.
-The original 2018 flat-file starter is preserved under [`legacy/`](./legacy) for
-reference.
+The demo (the default `arena` mode): every connected client drives a circle with
+WASD/arrows around a shared arena; gold pickups bounce around; everything collides
+off the walls, the obstacles, and each other; all clients see each other live.
+
+This is the [chaochao](https://github.com/sjdodge123/chaochao) racing game's matured
+multiplayer architecture, harvested back into the starter it was forked from. The
+original 2018 flat-file starter is preserved under [`legacy/`](./legacy).
 
 ## Run it
 
@@ -20,92 +21,131 @@ npm install
 npm start
 ```
 
-Then open **http://localhost:3000/play.html in TWO browser tabs**. Drive with
-**WASD** or the **arrow keys**. Each tab is its own player; both tabs render both
-circles, moving live, and the circles bounce off each other and off the arena walls.
-(Your own circle is ringed white.)
+Open **http://localhost:3000/play.html in TWO browser tabs**, drive with **WASD** or
+the **arrow keys** (your own circle is ringed white). Both tabs render both players,
+the pickups, and the obstacles; everything bounces and stays in bounds.
+
+```bash
+npm test     # all suites (movement, physics, engine, stability, integration)
+npm run bench # engine throughput at 25/100/250 entities
+```
 
 ## Architecture
 
-One Node process does everything:
+One Node process serves the static client (Express, from `client/` + the shared
+integrator at `/shared`) **and** hosts the Socket.IO server on the same port. No
+bundler, no build step — the browser loads the raw `<script>` tags in `play.html`.
 
-- **It serves the static client** (Express, from `client/`) **and hosts the
-  Socket.IO server** on the same port. No bundler, no build step — the browser loads
-  the raw `<script>` tags in `play.html` directly.
-- **Gameplay is fully authoritative on the server.** The client owns no physics. It
-  reports only *intent* ("these movement keys are held") and renders the snapshots it
-  receives. The server's engine integrates input into velocity into position,
-  resolves wall and circle-vs-circle collisions, and is the single source of truth
-  for where everything is.
-- **A fixed-timestep tick loop.** `setInterval` at `serverTickSpeed` fans a tick out
-  to every room, which simulates and broadcasts a compact snapshot. The simulation
-  itself advances in constant `FIXED_DT` increments via an accumulator
-  (`Game.simulate`), so physics is deterministic and independent of real tick jitter
-  — an occasional long/short tick can't make motion wobble or tunnel a fast circle
-  through another. A long stall is absorbed by an anti-spiral clamp
-  (`maxSubStepsPerTick`) as a brief slowdown rather than a catch-up burst. The loop
-  sleeps while no one is connected and wakes on the first connection.
+**The server is authoritative.** It owns the simulation; clients render snapshots
+and report input. A **fixed-timestep accumulator** advances the sim in constant
+`FIXED_DT` increments (deterministic, jitter-immune; a long stall is clamped by
+`maxSubStepsPerTick`, not spiralled). Each tick it broadcasts a compact snapshot.
 
-The flow of one player:
+**The client is thin, with one exception: prediction.** It applies your own input
+locally the instant you press a key (so controls feel zero-latency), then reconciles
+that prediction against each authoritative snapshot. Remote entities are
+interpolated. The client owns no authoritative physics.
+
+The flow of one input:
 
 ```
-browser keydown ──"movement"──▶ server records held-input on that player
-                                         │
-server tick: engine integrates ──▶ collisions ──▶ commit positions
-                                         │
-        compressor packs snapshot ──"gameUpdates"──▶ every client in the room
-                                         │
-                       client decodes ──▶ eases positions ──▶ draws
+keydown ─▶ held flag ─▶ [client fixed step] predict locally + send {seq, keys}
+                                                    │
+server tick: apply input ─▶ integrate ─▶ collide ─▶ commit  (authoritative)
+                                                    │
+   snapshot {entities[…], tick, per-entity inputAck} ──▶ every client
+                                                    │
+   local player: reconcile (snap to truth, replay un-acked inputs)
+   remote entities: interpolate ─▶ draw through the camera
 ```
 
-## The two contracts you must respect when extending
+### Entity model
+Everything the engine simulates is an **Entity** (`server/entities/entity.js`) —
+a circle with a wire `type`, lifecycle, and a generic collision response. `Player`
+adds input; `Pickup` is a free-floating ball (a worked example of a second entity
+type — it inherits all collision for free). Static level geometry
+(`CircleObstacle`, `BoxObstacle`) is immovable. **To add a new entity type:**
+subclass `Entity`, give it a `type` tag, and the broad-phase, collision, and wire
+protocol pick it up automatically.
 
-1. **Lockstep.** What crosses the socket is *positional arrays*, not keyed objects
-   (dropping JSON keys is a big, free bandwidth win at 30 ticks/sec × every player).
-   The price: the meaning of each array slot lives only in the shared convention
-   between the packers in **`server/compressor.js`** and the decoders in
-   **`client/scripts/client.js`**. Any change to a per-tick (or spawn) payload shape
-   must be made in BOTH, in the same slot order, or the client silently reads the
-   wrong field. Each packer/decoder names its counterpart in a comment.
+### Game-mode seam
+`server/modes/arena.js` is the default mode and the template for your own. A mode
+gets lifecycle hooks — `onStart`, `onStop`, `onPlayerJoin`, `onPlayerLeave`,
+`onTick`, `checkWin` — and the `game` to read/mutate (`spawnEntity`,
+`despawnEntity`, `entities`, `world`). The engine, networking, and entity model
+stay game-agnostic; your rules live in the mode. Point `config.gameMode` at a new
+file to swap games.
 
-2. **`config.json` is the single source of truth.** `server/config.json` holds all
-   tuning (world size, tick speed, player physics, the `stateMap`). The server loads
-   it once and ships *the same object* to the client on join (in the `gameState`
-   payload). Read tuning from that delivered config on the client — don't hard-code a
-   second copy, or the two halves will drift apart.
+## The contracts you must respect when extending
+
+1. **Lockstep + protocol version.** Payloads are positional arrays (no JSON keys)
+   to save bandwidth. Their slot layout is a matched pair between
+   `server/compressor.js` (packers) and `client/scripts/client.js` (decoders) —
+   change one, change the other in the same slot order. The protocol is **versioned**
+   (`config.protocolVersion`, checked on join against `CLIENT_PROTOCOL_VERSION`), so
+   a layout drift fails loudly instead of silently misreading.
+2. **`config.json` is the single source of truth.** All tuning (world size, tick
+   rate, player physics, pickup/obstacle params, the `stateMap`) lives there and is
+   shipped to the client on join. Read it on both sides; don't fork the numbers.
+3. **The movement integrator is shared.** `shared/movement.js` is the ONE piece of
+   sim code that runs on both server and client (prediction). If you change how
+   players move, change it there — divergence shows up as reconciliation jitter.
 
 ## File tree
 
 ```
-index.js                      Entry: Express static server + Socket.IO + the tick loop (wake/sleep).
-package.json                  express, socket.io, compression. `npm start`.
+index.js                      Express static server (client/ + /shared) + Socket.IO + the tick loop.
+shared/
+  movement.js                 The shared input→velocity→position integrator (server require + browser global).
 server/
-  config.json                 Single source of truth: world size, tick speed, player physics, stateMap.
-  utils.js                    Config loader + dt clock + pure math (getMag/getMagSq/dotProduct/getRandomInt) + colour picker.
-  engine.js                   Physics core: step()/integrate() (one fixed step), QuadTree broad-phase, narrow-phase handleHit dispatch, wall bounce.
-  compressor.js               SERVER half of the wire contract — packs every payload into positional arrays.
-  hostess.js                  Room registry / matchmaker: find-or-create a room with space, tick all rooms, reclaim empties.
-  messenger.js                Socket boundary: per-connection handlers (getConfig / enterGame / movement / leave) + room broadcasts.
-  game.js                     Room + a tiny two-state Game machine (waiting ⇄ playing); runs the fixed-timestep accumulator that drives engine.step.
+  config.json                 Single source of truth: protocol version, world, tick, physics, pickups, obstacles, mode.
+  utils.js                    Config loader + dt clock + pure math + colour picker.
+  engine.js                   Physics core: step() (fixed step), QuadTree broad-phase (dynamic + static), collision dispatch, wall bounce.
+  compressor.js               SERVER half of the wire contract — type-tagged entities, input acks, obstacles, positional arrays.
+  hostess.js                  Room registry / matchmaker (prototype-less map; validated sigs).
+  messenger.js                Socket boundary: getConfig / enterGame / movement (seq-checked) / leave + room broadcasts.
+  game.js                     Room + Game: fixed-timestep accumulator, entity bookkeeping, server tick, hosts the game mode.
+  modes/
+    arena.js                  Default game mode + template (lifecycle hooks; spawns the demo pickups).
   entities/
-    shapes.js                 Geometry primitives: Shape / Rect / Circle and their overlap tests.
-    world.js                  The arena (extends Rect); creates and spawns players with a unique colour.
-    player.js                 A driven circle: input flags, velocity/physics, and the circle-vs-circle bounce in handleHit.
+    entity.js                 Base dynamic entity: lifecycle + generic circle/box collision response.
+    player.js                 Input-driven entity; motion via the shared integrator; input sequence acks.
+    pickup.js                 Example second entity type — a free-floating bouncing ball.
+    obstacles.js              Static level geometry: immovable CircleObstacle + BoxObstacle (AABB).
+    shapes.js                 Geometry primitives (Shape / Rect / Circle) and overlap tests.
+    world.js                  Arena rect + default obstacle layout + player creation/spawn.
 client/
-  play.html                   Canvas page; loads the raw client scripts in dependency order (no bundler).
+  play.html                   Canvas page; loads the shared integrator + raw client scripts (no bundler).
   scripts/
-    utils.js                  Client math helpers + requestAnimationFrame shim.
-    game.js                   Bootstrap (connect → enterGame) + the render loop + client-side motion smoothing.
-    client.js                 Socket handlers + DECODERS that mirror compressor.js (the lockstep partner).
-    draw.js                   Minimal canvas renderer (arena border + a circle per player).
-    input.js                  Keyboard → "movement" events to the server.
+    utils.js                  Client math + requestAnimationFrame shim.
+    camera.js                 Follow camera + world→screen transform (clamped to the world).
+    game.js                   Bootstrap + render loop + the fixed-step prediction/emit loop + DPR resize.
+    prediction.js             Client-side prediction + server reconciliation for the local player.
+    client.js                 Socket handlers + DECODERS (lockstep partner of compressor.js) + protocol-version check.
+    draw.js                   Canvas renderer (arena, obstacles, entities) through the camera.
+    input.js                  Keyboard → held movement flags (sampled by the prediction loop).
+test/
+  run.js                      `npm test` runner (standalone suites + spawns a server for integration).
+  movement.test.js            Shared integrator: determinism, speed clamp, braking.
+  physics.test.js             Entity-vs-entity elastic collision + wall bounce.
+  engine.test.js              Obstacle collisions (circle + box), cross-type, pickup-vs-wall.
+  stability.test.js           Fixed-timestep determinism under jitter + anti-spiral clamp.
+  integration.test.js         Two scripted clients vs a live server (protocol + lockstep + sync).
+  perf.bench.js               Engine throughput at 25/100/250 entities.
+.github/workflows/ci.yml      CI: npm ci + npm test.
 legacy/                       The original 2018 flat-file starter, kept for reference.
 ```
 
 ## What's intentionally NOT here
 
-This is a skeleton, so chaochao's actual game is gone on purpose: no maps / map
-editor, no Voronoi-tile terrain, no abilities, no punches/combat, no AI bots, no
-scoring or rounds, no music / achievements, no auth or accounts, no analytics, and
-no build/bundling step. What's left is just the authoritative-multiplayer pattern —
-add your game on top of it.
+This is a foundation, so genre/scale-specific machinery is deliberately omitted
+until a real game (and a profiler) calls for it: delta/binary snapshot compression,
+area-of-interest culling, lag compensation, an ECS, a full asset/sprite pipeline,
+persistence/accounts, and (from the donor) maps editor, abilities, AI, scoring,
+music. The engine isn't CPU-bound at this scale (~6.5µs/tick for 25 entities, well
+under 0.1% of the tick budget), so those optimizations would be premature.
+
+The skeleton also keeps the **simplest correct** version of a few things, with the
+upgrade path noted in-code: the server applies the latest reported input each step
+(a per-input queue gives tighter determinism); prediction corrects collisions by
+reconciliation rather than simulating the whole world client-side (standard).
