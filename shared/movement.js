@@ -68,5 +68,30 @@
         e.newY += e.velY * dt;
     }
 
-    return { applyMovement: applyMovement, driveFromInput: driveFromInput };
+    // Keep a circular/box body inside the world by reflecting the offending
+    // velocity component (damped) and clamping the scratch position just inside the
+    // edge. Shared so the server (engine.bounceOffBoundry) and the client predictor
+    // (prediction.js) bounce off walls IDENTICALLY — otherwise reconciliation would
+    // pop every time you drive into a wall. `halfW`/`halfH` are the body's
+    // half-extents (radius for a circle); `damping` is the restitution.
+    function applyBounds(e, bound, halfW, halfH, damping) {
+        if (e.newX - halfW < bound.x) {
+            e.newX = bound.x + halfW;
+            e.velX = -e.velX * damping;
+        }
+        if (e.newX + halfW > bound.x + bound.width) {
+            e.newX = bound.x + bound.width - halfW;
+            e.velX = -e.velX * damping;
+        }
+        if (e.newY - halfH < bound.y) {
+            e.newY = bound.y + halfH;
+            e.velY = -e.velY * damping;
+        }
+        if (e.newY + halfH > bound.y + bound.height) {
+            e.newY = bound.y + bound.height - halfH;
+            e.velY = -e.velY * damping;
+        }
+    }
+
+    return { applyMovement: applyMovement, driveFromInput: driveFromInput, applyBounds: applyBounds };
 }));

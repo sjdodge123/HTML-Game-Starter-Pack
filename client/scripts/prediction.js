@@ -33,20 +33,21 @@ function predictionInit(spawnX, spawnY) {
 }
 
 // Apply one input to the predicted state for one fixed step, using the SHARED
-// integrator, then keep the predicted player inside the world (mirrors the
-// server's wall clamp closely enough that prediction doesn't visibly leave the
-// arena before the next snapshot).
+// integrator AND the SHARED wall-bounce — the exact code the server runs. Reflecting
+// velocity off the wall (not just clamping position) is what makes the prediction
+// match the server at the boundary, so reconciliation doesn't pop when you drive
+// into a wall. (Entity-vs-entity / obstacle collisions are resolved server-side
+// only, so those still correct via reconciliation — expected.)
 function predictApply(input, dt) {
     predicted.newX = predicted.x;
     predicted.newY = predicted.y;
     SharedMovement.applyMovement(predicted, input, dt, predictConsts);
-    predicted.x = predicted.newX;
-    predicted.y = predicted.newY;
     if (world != null && config != null) {
         var r = config.playerBaseRadius;
-        predicted.x = clamp(predicted.x, world.x + r, world.x + world.width - r);
-        predicted.y = clamp(predicted.y, world.y + r, world.y + world.height - r);
+        SharedMovement.applyBounds(predicted, world, r, r, config.wallBounceDamping);
     }
+    predicted.x = predicted.newX;
+    predicted.y = predicted.newY;
 }
 
 // One prediction step: stamp a seq, record + apply the input locally, and return

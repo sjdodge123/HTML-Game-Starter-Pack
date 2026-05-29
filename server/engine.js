@@ -13,7 +13,7 @@
 //   - broadBase / narrowBase : QuadTree broad-phase (dynamic + static), per-pair
 //                   handleHit(); statics are tested but never initiate.
 //   - QuadTree : the spatial index that keeps collision O(n log n), not O(n^2).
-//   - bounceOffBoundry / checkDistance : keep entities in the arena.
+//   - bounceOffBoundry : keep entities in the arena (shape-agnostic via getExtents).
 //
 // The collision contract is unchanged from chaochao: narrowBase calls
 // obj.handleHit(other) on BOTH objects of a colliding pair, and each entity owns
@@ -22,22 +22,19 @@
 
 var utils = require('./utils.js');
 var c = utils.loadConfig();
+var { applyBounds } = require('../shared/movement.js'); // shared wall-bounce (client predicts with the same code)
 
 var EMPTY = []; // shared empty array for the "no statics" default (never mutated)
 
-exports.getEngine = function (playerList) {
-    return new Engine(playerList);
-};
-exports.checkDistance = function (obj1, obj2) {
-    return checkDistance(obj1, obj2);
+exports.getEngine = function () {
+    return new Engine();
 };
 exports.bounceOffBoundry = function (obj, bound) {
     bounceOffBoundry(obj, bound);
 };
 
 class Engine {
-    constructor(playerList) {
-        this.playerList = playerList;
+    constructor() {
         this.dt = 0;
         this.quadTree = null;
         this.worldWidth = 0;
@@ -201,41 +198,14 @@ class QuadTree {
     }
 }
 
-// Distance check between two circular bodies, using the scratch position
-// (newX/newY) when present. true when they overlap. From chaochao's engine.
-function checkDistance(obj1, obj2) {
-    var objX1 = obj1.newX || obj1.x;
-    var objY1 = obj1.newY || obj1.y;
-    var objX2 = obj2.newX || obj2.x;
-    var objY2 = obj2.newY || obj2.y;
-    var distance = utils.getMag(objX2 - objX1, objY2 - objY1);
-    distance -= obj1.radius || obj1.height / 2;
-    distance -= obj2.radius || obj2.height / 2;
-    return distance <= 0;
-}
-
-// Keep a circular body inside the rectangular world. Adapted from chaochao's
-// bounceOffBoundry: where the original was tuned for projectiles (flip an angle,
-// multiply velocity by -3 to ricochet faster), the skeleton's players have no
-// angle and shouldn't gain energy off a wall — so we clamp the body just inside
-// the edge and reflect the offending velocity component, damped, for a clean
-// elastic bounce. Operates on the scratch position before Player.move() commits it.
+// Keep a body inside the rectangular world. Shape-agnostic: derive the body's
+// half-extents from its own bounding box (radius for a circle; w/2,h/2 for a
+// future box entity), then reflect+clamp via the SHARED bounds helper — the exact
+// code the client predicts with, so a player reconciles cleanly even at a wall.
+// Operates on the scratch position before move() commits it.
 function bounceOffBoundry(obj, bound) {
-    var damp = c.wallBounceDamping;
-    if (obj.newX - obj.radius < bound.x) {
-        obj.newX = bound.x + obj.radius;
-        obj.velX = -obj.velX * damp;
-    }
-    if (obj.newX + obj.radius > bound.x + bound.width) {
-        obj.newX = bound.x + bound.width - obj.radius;
-        obj.velX = -obj.velX * damp;
-    }
-    if (obj.newY - obj.radius < bound.y) {
-        obj.newY = bound.y + obj.radius;
-        obj.velY = -obj.velY * damp;
-    }
-    if (obj.newY + obj.radius > bound.y + bound.height) {
-        obj.newY = bound.y + bound.height - obj.radius;
-        obj.velY = -obj.velY * damp;
-    }
+    var ext = obj.getExtents();
+    var halfW = (ext.maxX - ext.minX) / 2;
+    var halfH = (ext.maxY - ext.minY) / 2;
+    applyBounds(obj, bound, halfW, halfH, c.wallBounceDamping);
 }

@@ -30,6 +30,11 @@ class Entity extends Circle {
         this.alive = true;
         this.solid = true;         // participates in collision
         this.movable = true;       // gets pushed by collisions (obstacles set this false)
+        // Survives a round wind-down (waiting transition). Players are cleaned up via
+        // join/leave; a mode that wants a non-player entity to persist across rounds
+        // sets this true so Game.clearNonPlayers leaves it alone (instead of the host
+        // hardcoding which types persist).
+        this.persistent = false;
         // Pre-collision velocity snapshot + per-step pair guard (see handleHit and
         // Engine.step). cvX/cvY make the symmetric response order-independent;
         // hitThisTick resolves each pair once even though the broad-phase visits it
@@ -66,24 +71,13 @@ class Entity extends Circle {
 
         var nx, ny, pen;
         if (other.isBox) {
-            // circle (this) vs axis-aligned box (other): nearest point on the box.
-            var cx = this.newX, cy = this.newY;
-            var px = clamp(cx, other.minX, other.maxX);
-            var py = clamp(cy, other.minY, other.maxY);
-            var dx = cx - px, dy = cy - py;
-            var d = Math.sqrt(dx * dx + dy * dy);
-            if (d > 1e-9) {
-                nx = dx / d; ny = dy / d; pen = this.radius - d;
-            } else {
-                // center is inside the box — eject along the nearest face.
-                var left = cx - other.minX, right = other.maxX - cx;
-                var top = cy - other.minY, bottom = other.maxY - cy;
-                var m = Math.min(left, right, top, bottom);
-                if (m === left) { nx = -1; ny = 0; pen = this.radius + left; }
-                else if (m === right) { nx = 1; ny = 0; pen = this.radius + right; }
-                else if (m === top) { nx = 0; ny = -1; pen = this.radius + top; }
-                else { nx = 0; ny = 1; pen = this.radius + bottom; }
+            // circle (this) vs axis-aligned box (other): one shared geometry helper
+            // for both the response here and the detection in inBounds.
+            var contact = circleBoxContact(this.newX, this.newY, this.radius, other);
+            if (contact == null) {
+                return; // not actually penetrating at the scratch position
             }
+            nx = contact.nx; ny = contact.ny; pen = contact.pen;
         } else {
             // circle vs circle.
             var ex = this.newX - other.newX, ey = this.newY - other.newY;
@@ -91,9 +85,9 @@ class Entity extends Circle {
             if (dist === 0) { ex = 1; ey = 0; dist = 1; } // perfectly stacked: deterministic normal
             nx = ex / dist; ny = ey / dist;
             pen = (this.radius + other.radius) - dist;
-        }
-        if (pen <= 0) {
-            return; // not actually penetrating at the scratch position
+            if (pen <= 0) {
+                return; // not actually penetrating at the scratch position
+            }
         }
 
         if (other.movable) {
@@ -123,13 +117,34 @@ class Entity extends Circle {
     // top of Circle's circle/rect tests.
     inBounds(other) {
         if (other.isBox) {
-            var px = clamp(this.newX, other.minX, other.maxX);
-            var py = clamp(this.newY, other.minY, other.maxY);
-            var dx = this.newX - px, dy = this.newY - py;
-            return (dx * dx + dy * dy) <= this.radius * this.radius;
+            return circleBoxContact(this.newX, this.newY, this.radius, other) != null;
         }
         return super.inBounds(other);
     }
+}
+
+// Circle-vs-AABB contact: the single source of truth for circle/box geometry, used
+// by both Entity.inBounds (detection) and Entity.handleHit (response). Returns the
+// contact normal (pointing from the box toward the circle) and penetration depth,
+// or null when they don't overlap. Handles the circle center being inside the box
+// by ejecting along the nearest face.
+function circleBoxContact(cx, cy, radius, box) {
+    var px = clamp(cx, box.minX, box.maxX);
+    var py = clamp(cy, box.minY, box.maxY);
+    var dx = cx - px, dy = cy - py;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    if (d > 1e-9) {
+        var pen = radius - d;
+        return pen > 0 ? { nx: dx / d, ny: dy / d, pen: pen } : null;
+    }
+    // center inside the box — eject along the nearest face.
+    var left = cx - box.minX, right = box.maxX - cx;
+    var top = cy - box.minY, bottom = box.maxY - cy;
+    var m = Math.min(left, right, top, bottom);
+    if (m === left) { return { nx: -1, ny: 0, pen: radius + left }; }
+    if (m === right) { return { nx: 1, ny: 0, pen: radius + right }; }
+    if (m === top) { return { nx: 0, ny: -1, pen: radius + top }; }
+    return { nx: 0, ny: 1, pen: radius + bottom };
 }
 
 module.exports = { Entity };

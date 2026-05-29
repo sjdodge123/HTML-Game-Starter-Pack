@@ -25,6 +25,12 @@ function registerHandlers(server) {
         myID = gs.myID;
         serverTick = gs.tick;
 
+        // gameState is a FULL snapshot. Reset the entity set first so a reconnect
+        // (Socket.IO auto-reconnects and re-emits enterGame, getting a fresh socket
+        // id + snapshot) can't leave the old player and any since-despawned entities
+        // as frozen ghosts — our own despawns were broadcast while we were offline.
+        entities = {};
+
         worldResize(gs.world);
         decodeObstacles(gs.obstacles);
         spawnEntities(gs.entityList);

@@ -172,13 +172,15 @@ class Game {
             this.accumulator -= FIXED_DT;
         }
     }
-    // Drop everything the mode spawned when the match winds back to waiting, so a
-    // fresh start (onStart) doesn't accumulate stale entities. Broadcasts the
-    // despawns so clients clear them too.
+    // Drop the transient entities the mode spawned when the match winds back to
+    // waiting, so a fresh start (onStart) doesn't accumulate stale ones. Players are
+    // managed via join/leave; an entity flagged `persistent` is left alone (the mode
+    // opts in). Broadcasts the despawns so clients clear them too.
     clearNonPlayers() {
         var ids = [];
         for (var id in this.entities) {
-            if (this.entities[id].type !== 'player') {
+            var e = this.entities[id];
+            if (e.type !== 'player' && !e.persistent) {
                 ids.push(id);
             }
         }
