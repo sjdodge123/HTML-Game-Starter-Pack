@@ -37,9 +37,14 @@ One Node process does everything:
   receives. The server's engine integrates input into velocity into position,
   resolves wall and circle-vs-circle collisions, and is the single source of truth
   for where everything is.
-- **A fixed-timestep tick loop** (`setInterval` at `serverTickSpeed`) simulates every
-  room and broadcasts a compact snapshot each tick. The loop sleeps while no one is
-  connected and wakes on the first connection.
+- **A fixed-timestep tick loop.** `setInterval` at `serverTickSpeed` fans a tick out
+  to every room, which simulates and broadcasts a compact snapshot. The simulation
+  itself advances in constant `FIXED_DT` increments via an accumulator
+  (`Game.simulate`), so physics is deterministic and independent of real tick jitter
+  — an occasional long/short tick can't make motion wobble or tunnel a fast circle
+  through another. A long stall is absorbed by an anti-spiral clamp
+  (`maxSubStepsPerTick`) as a brief slowdown rather than a catch-up burst. The loop
+  sleeps while no one is connected and wakes on the first connection.
 
 The flow of one player:
 
@@ -77,11 +82,11 @@ package.json                  express, socket.io, compression. `npm start`.
 server/
   config.json                 Single source of truth: world size, tick speed, player physics, stateMap.
   utils.js                    Config loader + dt clock + pure math (getMag/getMagSq/dotProduct/getRandomInt) + colour picker.
-  engine.js                   Physics core: velocity integration, QuadTree broad-phase, narrow-phase handleHit dispatch, wall bounce.
+  engine.js                   Physics core: step()/integrate() (one fixed step), QuadTree broad-phase, narrow-phase handleHit dispatch, wall bounce.
   compressor.js               SERVER half of the wire contract — packs every payload into positional arrays.
   hostess.js                  Room registry / matchmaker: find-or-create a room with space, tick all rooms, reclaim empties.
   messenger.js                Socket boundary: per-connection handlers (getConfig / enterGame / movement / leave) + room broadcasts.
-  game.js                     Room + a tiny two-state Game machine (waiting ⇄ playing) that runs the authoritative tick.
+  game.js                     Room + a tiny two-state Game machine (waiting ⇄ playing); runs the fixed-timestep accumulator that drives engine.step.
   entities/
     shapes.js                 Geometry primitives: Shape / Rect / Circle and their overlap tests.
     world.js                  The arena (extends Rect); creates and spawns players with a unique colour.

@@ -6,7 +6,9 @@
 // game-specific physics (Voronoi tile/cell collision, punches, pucks, cuts,
 // explosions, projectiles, moving hazards). The skeleton keeps the entity-vs-entity
 // core and DROPS everything map/ability/projectile-shaped:
-//   - Engine.updatePlayers : integrate input -> velocity -> position each tick.
+//   - Engine.step : one fixed-timestep step — integrate, wall-bounce, collide,
+//                   commit. Called N times per tick by Game.simulate's accumulator.
+//   - Engine.integrate : input -> velocity -> scratch position for one entity.
 //   - broadBase / narrowBase : QuadTree broad-phase, then per-pair handleHit().
 //   - QuadTree : the spatial index that keeps collision O(n log n), not O(n^2).
 //   - bounceOffBoundry / checkDistance : keep entities in the arena.
@@ -37,68 +39,89 @@ class Engine {
         this.worldWidth = 0;
         this.worldHeight = 0;
     }
-    update(dt) {
+    // Advance the simulation by ONE fixed timestep over `players` (a prebuilt
+    // array of the alive entities to simulate). This is the whole physics step:
+    //   1. integrate each entity's input into velocity and position,
+    //   2. keep each inside the world (wall bounce),
+    //   3. snapshot pre-collision velocity + reset the per-step pair guard,
+    //   4. broad/narrow-phase resolve entity-vs-entity collisions,
+    //   5. commit the scratch position to the authoritative position.
+    // `players` is an ARRAY, not the playerList object: the caller (Game.simulate)
+    // builds it once per tick and reuses it across sub-steps. Iterating an array
+    // is meaningfully cheaper than a `for..in` over the playerList map on V8's hot
+    // path, and it lets the fixed-timestep accumulator run N sub-steps without
+    // rebuilding the set each time.
+    step(dt, world, players) {
         this.dt = dt;
-        this.updatePlayers();
-    }
-    // Integrate each player's input into velocity and velocity into position.
-    // Input arrives as four booleans (set by the movement socket event); they map
-    // to a unit drive direction. This is chaochao's integration, stripped of the
-    // AI branch, the stamina/exhaustion drive penalty, and speed/drag bonuses.
-    updatePlayers() {
-        for (var playerSig in this.playerList) {
-            var player = this.playerList[playerSig];
-            if (player.alive == false) {
-                continue;
-            }
-            var dirX = 0;
-            var dirY = 0;
-            var braking = false;
-            if (player.moveForward && !player.moveBackward && !player.turnLeft && !player.turnRight) {
-                dirY = -1;
-            } else if (!player.moveForward && player.moveBackward && !player.turnLeft && !player.turnRight) {
-                dirY = 1;
-            } else if (!player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
-                dirX = -1;
-            } else if (!player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
-                dirX = 1;
-            } else if (player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
-                dirY = -Math.SQRT1_2; dirX = -Math.SQRT1_2;
-            } else if (player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
-                dirY = -Math.SQRT1_2; dirX = Math.SQRT1_2;
-            } else if (!player.moveForward && player.moveBackward && player.turnLeft && !player.turnRight) {
-                dirY = Math.SQRT1_2; dirX = -Math.SQRT1_2;
-            } else if (!player.moveForward && player.moveBackward && !player.turnLeft && player.turnRight) {
-                dirY = Math.SQRT1_2; dirX = Math.SQRT1_2;
-            } else {
-                braking = true;
-            }
-
-            var newVelX = player.velX + player.acel * dirX * this.dt;
-            var newVelY = player.velY + player.acel * dirY * this.dt;
-
-            if (braking) {
-                newVelX -= player.brakeCoeff * player.velX;
-                newVelY -= player.brakeCoeff * player.velY;
-            } else {
-                newVelX -= player.dragCoeff * player.velX;
-                newVelY -= player.dragCoeff * player.velY;
-            }
-
-            var newVel = utils.getMag(newVelX, newVelY);
-            if (newVel > player.maxVelocity) {
-                player.velX = player.maxVelocity * (newVelX / newVel);
-                player.velY = player.maxVelocity * (newVelY / newVel);
-            } else {
-                player.velX = newVelX;
-                player.velY = newVelY;
-            }
-            // Integrate into the SCRATCH position (newX/newY). The authoritative
-            // x/y isn't committed until Player.move() runs after collision
-            // resolution, so collision tests this tick see the about-to-be position.
-            player.newX += player.velX * this.dt;
-            player.newY += player.velY * this.dt;
+        for (var i = 0; i < players.length; i++) {
+            var p = players[i];
+            this.integrate(p, dt);
+            bounceOffBoundry(p, world);
+            // Snapshot for the symmetric collision response (see Player.handleHit),
+            // and clear the "already bounced this step" pair guard.
+            p.cvX = p.velX;
+            p.cvY = p.velY;
+            p.hitThisTick = {};
         }
+        this.broadBase(players);
+        for (var j = 0; j < players.length; j++) {
+            players[j].move();
+        }
+    }
+    // Integrate one entity's input into velocity, and velocity into the SCRATCH
+    // position (newX/newY) — the authoritative x/y isn't committed until move()
+    // runs after collision resolution, so collision tests see the about-to-be
+    // position. Input is four booleans mapped to a unit drive direction. This is
+    // chaochao's integration, stripped of the AI branch, the stamina/exhaustion
+    // drive penalty, and speed/drag bonuses. With a FIXED dt (see Game.simulate)
+    // the velocity/drag update is deterministic and free of tick-jitter wobble.
+    integrate(player, dt) {
+        var dirX = 0;
+        var dirY = 0;
+        var braking = false;
+        if (player.moveForward && !player.moveBackward && !player.turnLeft && !player.turnRight) {
+            dirY = -1;
+        } else if (!player.moveForward && player.moveBackward && !player.turnLeft && !player.turnRight) {
+            dirY = 1;
+        } else if (!player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
+            dirX = -1;
+        } else if (!player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
+            dirX = 1;
+        } else if (player.moveForward && !player.moveBackward && player.turnLeft && !player.turnRight) {
+            dirY = -Math.SQRT1_2; dirX = -Math.SQRT1_2;
+        } else if (player.moveForward && !player.moveBackward && !player.turnLeft && player.turnRight) {
+            dirY = -Math.SQRT1_2; dirX = Math.SQRT1_2;
+        } else if (!player.moveForward && player.moveBackward && player.turnLeft && !player.turnRight) {
+            dirY = Math.SQRT1_2; dirX = -Math.SQRT1_2;
+        } else if (!player.moveForward && player.moveBackward && !player.turnLeft && player.turnRight) {
+            dirY = Math.SQRT1_2; dirX = Math.SQRT1_2;
+        } else {
+            braking = true;
+        }
+
+        var newVelX = player.velX + player.acel * dirX * dt;
+        var newVelY = player.velY + player.acel * dirY * dt;
+
+        if (braking) {
+            newVelX -= player.brakeCoeff * player.velX;
+            newVelY -= player.brakeCoeff * player.velY;
+        } else {
+            newVelX -= player.dragCoeff * player.velX;
+            newVelY -= player.dragCoeff * player.velY;
+        }
+
+        var newVel = utils.getMag(newVelX, newVelY);
+        if (newVel > player.maxVelocity) {
+            // newVel > maxVelocity > 0, so this division is always safe (no 0/0).
+            var scale = player.maxVelocity / newVel;
+            player.velX = newVelX * scale;
+            player.velY = newVelY * scale;
+        } else {
+            player.velX = newVelX;
+            player.velY = newVelY;
+        }
+        player.newX += player.velX * dt;
+        player.newY += player.velY * dt;
     }
     // Broad-phase: rebuild the QuadTree from this tick's entities, then for each
     // entity retrieve only the candidates sharing its quadrant and narrow-phase

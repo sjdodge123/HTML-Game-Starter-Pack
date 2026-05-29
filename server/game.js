@@ -17,6 +17,17 @@ var _engine = require('./engine.js');
 var compressor = require('./compressor.js');
 var { World } = require('./entities/world.js');
 
+// Fixed-timestep simulation constants. The sim always advances in constant
+// FIXED_DT increments regardless of how jittery the real tick interval is, so
+// physics is deterministic and dt-invariant (no tick-jitter wobble, no tunnelling
+// from an occasional long tick). FIXED_DT is the nominal tick interval, so under
+// normal scheduling there's exactly ONE sub-step per tick and the game feel is
+// identical to a plain per-tick update — the accumulator only matters when a tick
+// runs long or short. MAX_SUBSTEPS caps the catch-up so a long stall (GC, the
+// process being descheduled) causes a brief slowdown instead of a death spiral.
+var FIXED_DT = c.serverTickSpeed / 1000;
+var MAX_SUBSTEPS = c.maxSubStepsPerTick;
+
 exports.getRoom = function (sig, size) {
     return new Room(sig, size);
 };
@@ -85,6 +96,9 @@ class Game {
         this.playerCount = 0;
         this.stateMap = c.stateMap;
         this.currentState = this.stateMap.waiting;
+        // Leftover real time not yet consumed by a fixed sub-step; carried to the
+        // next tick so the sim tracks wall-clock time smoothly (see simulate).
+        this.accumulator = 0;
     }
     update(dt) {
         this.getPlayerCount();
@@ -103,33 +117,32 @@ class Game {
             this.simulate(dt);
         }
     }
-    // The authoritative tick: integrate, keep everyone in bounds, resolve
-    // player-vs-player collisions, then commit positions. Ordering matters —
-    // collisions run on the scratch position (newX/newY) the engine just
-    // integrated, and Player.move() commits it last.
+    // The authoritative tick, driven by a fixed-timestep accumulator. We add the
+    // real elapsed time to the accumulator and drain it in constant FIXED_DT
+    // sub-steps, so the physics integrator always sees the same dt no matter how
+    // uneven the real tick interval is. The alive-players array is built ONCE here
+    // and reused across every sub-step (the set can't change mid-tick), keeping the
+    // per-step hot path on an array rather than a for..in over the playerList map.
     simulate(dt) {
-        this.engine.update(dt);
-
         var players = [];
         for (var id in this.playerList) {
-            var player = this.playerList[id];
-            if (player.alive == false) {
-                continue;
+            if (this.playerList[id].alive) {
+                players.push(this.playerList[id]);
             }
-            _engine.bounceOffBoundry(player, this.world);
-            // Snapshot the post-integration, post-wall velocity so player-vs-player
-            // collision response reads a stable value for both bodies of a pair
-            // (see Player.handleHit / cvX,cvY).
-            player.cvX = player.velX;
-            player.cvY = player.velY;
-            player.hitThisTick = {};
-            players.push(player);
         }
 
-        this.engine.broadBase(players);
-
-        for (var i = 0; i < players.length; i++) {
-            players[i].move();
+        this.accumulator += dt;
+        // Anti-spiral clamp: never try to catch up more than MAX_SUBSTEPS worth of
+        // time in one tick. A long stall is absorbed as a brief slowdown, not a
+        // burst of steps that stalls the loop further.
+        var maxAccumulated = FIXED_DT * MAX_SUBSTEPS;
+        if (this.accumulator > maxAccumulated) {
+            this.accumulator = maxAccumulated;
+        }
+        while (this.accumulator >= FIXED_DT) {
+            // engine.step owns one full step: integrate, wall-bounce, collide, commit.
+            this.engine.step(FIXED_DT, this.world, players);
+            this.accumulator -= FIXED_DT;
         }
     }
     getPlayerCount() {
