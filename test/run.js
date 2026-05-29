@@ -8,7 +8,7 @@ var { spawnSync, spawn } = require('child_process');
 var DIR = __dirname;
 var node = process.execPath;
 
-var standalone = ['movement.test.js', 'physics.test.js', 'engine.test.js', 'stability.test.js'];
+var standalone = ['movement.test.js', 'physics.test.js', 'engine.test.js', 'queue.test.js', 'stability.test.js'];
 var failures = 0;
 
 console.log('=== standalone suites ===');

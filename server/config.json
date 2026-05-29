@@ -3,6 +3,7 @@
     "port": 3000,
     "serverTickSpeed": 33.33,
     "maxSubStepsPerTick": 5,
+    "maxInputQueue": 10,
     "worldWidth": 1366,
     "worldHeight": 768,
     "minPlayersToStart": 1,

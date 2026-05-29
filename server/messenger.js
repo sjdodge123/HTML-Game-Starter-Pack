@@ -103,11 +103,12 @@ function checkForMail(client) {
         client.broadcast.to(String(roomSig)).emit('entitySpawn', compressor.appendEntity(player));
     });
 
-    // The only gameplay input: the held movement keys plus a monotonically
-    // increasing sequence number. The client is authoritative over NOTHING — it
-    // reports intent; the engine decides the motion. We ignore stale/duplicate
-    // inputs (seq <= last seen) and echo the accepted seq back each tick so the
-    // client can reconcile its prediction.
+    // The only gameplay input: one held-keys command per client fixed step, with a
+    // monotonically increasing sequence number. The client is authoritative over
+    // NOTHING — it reports intent; the engine decides the motion. Each command is
+    // ENQUEUED on the player and consumed one-per-sub-step (Player.control), so the
+    // server applies each input for the same single step the client predicted it
+    // for. The consumed seq is echoed back each tick for reconciliation.
     client.on('movement', function (packet) {
         var room = hostess.getRoomBySig(roomMailList[client.id]);
         if (room === undefined || packet == null) {
@@ -118,14 +119,16 @@ function checkForMail(client) {
             return;
         }
         var seq = Number(packet.seq);
-        if (!Number.isFinite(seq) || seq <= player.lastInputSeq) {
-            return; // stale, duplicate, or malformed
+        if (!Number.isFinite(seq)) {
+            return; // malformed
         }
-        player.lastInputSeq = seq;
-        player.currentInput.moveForward = !!packet.moveForward;
-        player.currentInput.moveBackward = !!packet.moveBackward;
-        player.currentInput.turnLeft = !!packet.turnLeft;
-        player.currentInput.turnRight = !!packet.turnRight;
+        player.enqueueInput({
+            seq: seq,
+            moveForward: !!packet.moveForward,
+            moveBackward: !!packet.moveBackward,
+            turnLeft: !!packet.turnLeft,
+            turnRight: !!packet.turnRight
+        });
     });
 
     client.on('playerLeaveRoom', function () {

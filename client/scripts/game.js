@@ -87,7 +87,10 @@ function animloop() {
     if (frameDt > 250) { frameDt = 250; } // tab was backgrounded — don't fast-forward a huge burst
 
     // Prediction runs on the SAME fixed timestep as the server. Each step: sample
-    // held input, advance the predicted local player, and send the input upstream.
+    // held input, advance the predicted local player, and send ONE seq'd input
+    // command upstream. The server enqueues these and consumes one per sub-step
+    // (its per-input queue), so it advances the player exactly as predicted here —
+    // which is what makes reconciliation a near-zero correction for free movement.
     predictionAccumulator += frameDt;
     var steps = 0;
     while (predictionAccumulator >= FIXED_DT_MS && steps < 10) {

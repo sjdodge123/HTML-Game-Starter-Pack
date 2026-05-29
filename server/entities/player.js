@@ -14,14 +14,23 @@ class Player extends Entity {
     constructor(x, y, color, id, roomSig) {
         super(x, y, c.playerBaseRadius, color, id, 'player');
         this.roomSig = roomSig;
-        // Latest reported held input. The movement handler overwrites this; the
-        // engine applies it each step. (The skeleton applies the most recent input
-        // each step — see README for the per-input-queue variant.)
+        // Per-input queue. The client produces ONE seq'd input command per fixed
+        // step and sends it; the server enqueues them here and consumes exactly ONE
+        // per simulation sub-step (Player.control), in order. Consuming one-per-step
+        // (rather than latching only the latest) makes the server apply each input
+        // for the same single step the client predicted it for — so a non-colliding
+        // player reconciles bit-exactly, not approximately.
+        this.inputQueue = [];
+        // The last consumed command's keys, reused while the queue is empty (a brief
+        // network gap) so the player coasts on its last input instead of stalling.
         this.currentInput = { moveForward: false, moveBackward: false, turnLeft: false, turnRight: false };
-        // Highest input sequence number processed, echoed back to the owning client
-        // every tick so it can reconcile its prediction (drop acked inputs, replay
-        // the rest). Monotonic; stale/duplicate inputs (seq <= this) are ignored.
+        // Highest seq CONSUMED — echoed to the owning client every tick as its
+        // reconciliation ack (drop inputs <= this, replay the rest). Advances by one
+        // per command consumed; stays put when the queue is empty.
         this.lastInputSeq = 0;
+        // Highest seq ever ENQUEUED — guards against stale/duplicate/out-of-order
+        // commands at the queue boundary.
+        this.lastQueuedSeq = 0;
         // Movement tuning, pulled from config once so the shared integrator gets the
         // same numbers on both sides (single source of truth).
         this.moveConsts = {
@@ -31,9 +40,33 @@ class Player extends Entity {
             brakeCoeff: c.playerBrakeCoeff
         };
     }
-    // Drive velocity + scratch position from the held input, using the exact same
-    // function the client predicts with.
+    // Enqueue one client input command. Rejected if it's stale/duplicate (seq not
+    // strictly greater than the last enqueued). The queue is bounded; on overflow
+    // the OLDEST is dropped (prefer the freshest input — lower latency), which
+    // reconciliation absorbs on the client.
+    enqueueInput(cmd) {
+        if (cmd.seq <= this.lastQueuedSeq) {
+            return; // stale, duplicate, or reordered
+        }
+        this.lastQueuedSeq = cmd.seq;
+        this.inputQueue.push(cmd);
+        if (this.inputQueue.length > c.maxInputQueue) {
+            this.inputQueue.shift();
+        }
+    }
+    // Consume exactly ONE queued input (if any) and drive velocity + scratch
+    // position from it, using the exact same function the client predicts with.
+    // With the queue empty (a network gap), reuse the last consumed input so motion
+    // continues smoothly; lastInputSeq only advances when a command is consumed.
     control(dt) {
+        if (this.inputQueue.length > 0) {
+            var cmd = this.inputQueue.shift();
+            this.currentInput.moveForward = cmd.moveForward;
+            this.currentInput.moveBackward = cmd.moveBackward;
+            this.currentInput.turnLeft = cmd.turnLeft;
+            this.currentInput.turnRight = cmd.turnRight;
+            this.lastInputSeq = cmd.seq;
+        }
         applyMovement(this, this.currentInput, dt, this.moveConsts);
     }
 }

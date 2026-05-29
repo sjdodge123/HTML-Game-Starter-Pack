@@ -51,7 +51,7 @@ The flow of one input:
 ```
 keydown ─▶ held flag ─▶ [client fixed step] predict locally + send {seq, keys}
                                                     │
-server tick: apply input ─▶ integrate ─▶ collide ─▶ commit  (authoritative)
+server: enqueue input ─▶ consume ONE per sub-step ─▶ integrate ─▶ collide ─▶ commit
                                                     │
    snapshot {entities[…], tick, per-entity inputAck} ──▶ every client
                                                     │
@@ -145,7 +145,9 @@ persistence/accounts, and (from the donor) maps editor, abilities, AI, scoring,
 music. The engine isn't CPU-bound at this scale (~6.5µs/tick for 25 entities, well
 under 0.1% of the tick budget), so those optimizations would be premature.
 
-The skeleton also keeps the **simplest correct** version of a few things, with the
-upgrade path noted in-code: the server applies the latest reported input each step
-(a per-input queue gives tighter determinism); prediction corrects collisions by
-reconciliation rather than simulating the whole world client-side (standard).
+Input is handled with a **per-input queue**: the client sends one seq'd command per
+fixed step, the server enqueues them and consumes exactly one per sub-step (in
+order, bounded), so it advances each player for the same single step the client
+predicted — making reconciliation a near-zero correction for free (non-colliding)
+movement. Collisions are resolved only server-side, so prediction corrects them by
+reconciliation rather than simulating the whole world on the client (standard).
